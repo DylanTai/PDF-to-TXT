@@ -1,10 +1,12 @@
 # PDF to Excel OCR Converter (Enhanced)
 
+**Last Updated: January 2025**
+
 ## Description
 
 This program converts PDF files into Excel-ready text files using OCR (Optical Character Recognition). It's specifically designed to extract numbered inventory items from PDF documents and format them into pipe-delimited columns that can be easily imported into Excel.
 
-**NEW: Enhanced OCR with automatic DPI selection and image preprocessing for improved accuracy!**
+**Features: Enhanced OCR with automatic DPI selection and image preprocessing for improved accuracy!**
 
 ## What It Does
 
@@ -49,7 +51,8 @@ Each line represents one inventory item, with fields separated by `|` characters
 
 ## Files Included
 
-- `pdftotext.py` - Single script that works on both Windows and macOS
+- `pdftotext.py` - Main script that works on both Windows and macOS
+- `pdftotext_test.py` - Test script for debugging (processes first 10 pages only)
 
 ## Requirements
 
@@ -122,6 +125,8 @@ elif system == 'Darwin':
 
 ## Usage
 
+### Full Processing (All Pages)
+
 1. Place your PDF file in the same directory as the script
 2. Run the script:
    - **Windows:** `python pdftotext.py`
@@ -133,6 +138,35 @@ elif system == 'Darwin':
 6. Find the output file: `yourfilename_output.txt`
 
 **The script will automatically detect your operating system and use the appropriate configuration!**
+
+### Test Mode (First 10 Pages Only)
+
+For testing and debugging, use `pdftotext_test.py` to process only the first 10 pages:
+
+1. **Create a test_files directory** in the same location as the scripts:
+
+```bash
+   mkdir test_files
+```
+
+2. Run the test script:
+
+   - **Windows:** `python pdftotext_test.py`
+   - **Mac:** `python3 pdftotext_test.py`
+
+3. Enter the filename and choose enhancement level
+
+4. The script will create:
+   - `test_files/preprocessed_images/` - Original and preprocessed images for each page
+   - `test_files/raw_ocr_text.txt` - Raw OCR output from all 10 pages
+   - `test_files/formatted_output.txt` - Formatted, pipe-delimited output
+
+**Use test mode to:**
+
+- Verify OCR quality before processing entire PDF
+- Compare preprocessing results visually
+- Debug issues with specific pages
+- Test different enhancement levels quickly
 
 ### Example Session
 
@@ -172,6 +206,7 @@ Your data will now be properly split into columns!
   - Start with **medium** for most PDFs
   - Use **low** if processing is too slow and your PDF is already clear
   - Use **high** if you're missing items or text quality is poor
+- **Test first**: Use `pdftotext_test.py` to test on 10 pages before processing the entire PDF
 - **Memory errors**: Reduce batch size from 20 to 10 pages by editing the script
 - **Processing time estimates** (per page):
 
@@ -235,8 +270,9 @@ result = pdf_to_excel_ready_text(pdf_file, output_file, batch_size=10, ocr_enhan
 
 - **Missing items in output**:
   1. First, try **high** enhancement level
-  2. Check the console output for statistics on missing items
-  3. Verify items have unit markers (EA, PC, LB, etc.)
+  2. Use `pdftotext_test.py` to inspect preprocessed images
+  3. Check the console output for statistics on missing items
+  4. Verify items have unit markers (EA, PC, LB, etc.)
 - **Memory errors**:
   - Reduce batch size to 10 or 5 in the script
   - Close other applications to free up RAM
@@ -247,8 +283,10 @@ result = pdf_to_excel_ready_text(pdf_file, output_file, batch_size=10, ocr_enhan
   - Process fewer pages at once
 - **Still poor accuracy on high**:
   - Check original PDF quality
+  - Use `pdftotext_test.py` to examine preprocessed images
   - Consider re-scanning the document at higher resolution
   - Some PDFs may have formatting that's incompatible with the parser
+- **Test script errors**: Make sure both `pdftotext.py` and `pdftotext_test.py` are in the same directory
 
 ## Limitations
 
@@ -263,11 +301,13 @@ result = pdf_to_excel_ready_text(pdf_file, output_file, batch_size=10, ocr_enhan
 
 If items are missing from the output, try these steps in order:
 
-1. **Switch to 'high' enhancement level** - This automatically uses 400 DPI and aggressive preprocessing
-2. **Check console statistics** - Look for which item numbers are missing
-3. **Verify unit markers** - Ensure items have EA, PC, LB, OZ, or PK in them
-4. **Review PDF quality** - Open the original PDF and check if text is readable
-5. **Check formatting** - Ensure item numbers are followed by periods (e.g., "175.")
+1. **Use test mode** - Run `pdftotext_test.py` to examine first 10 pages
+2. **Check preprocessed images** - Look at images in `test_files/preprocessed_images/` to verify quality
+3. **Switch to 'high' enhancement level** - This automatically uses 400 DPI and aggressive preprocessing
+4. **Check console statistics** - Look for which item numbers are missing
+5. **Verify unit markers** - Ensure items have EA, PC, LB, OZ, or PK in them
+6. **Review PDF quality** - Open the original PDF and check if text is readable
+7. **Check formatting** - Ensure item numbers are followed by periods (e.g., "175.")
 
 ### Decision Tree for Enhancement Level
 
@@ -278,8 +318,10 @@ Is your PDF clear and high-quality?
 │     └─ Still missing? → Try HIGH
 │
 └─ No/Unsure → Start with MEDIUM (recommended)
-   └─ Missing items? → Try HIGH
-      └─ Still issues? → Check PDF quality/formatting
+   └─ Missing items?
+      ├─ Run pdftotext_test.py to inspect images
+      └─ Try HIGH
+         └─ Still issues? → Check PDF quality/formatting
 ```
 
 ## Example Output
@@ -312,6 +354,14 @@ Number|Description|Qty|Estimate Amount|Taxes|Replacement Cost Total|Age / Cond. 
 5. Wait for processing
 6. Import the output .txt file into Excel using Text to Columns with `|` delimiter
 
+**For testing/debugging:**
+
+1. Create `test_files` directory: `mkdir test_files`
+2. Run `python3 pdftotext_test.py` (Mac) or `python pdftotext_test.py` (Windows)
+3. Enter your PDF filename
+4. Choose enhancement level
+5. Examine outputs in `test_files/` directory
+
 **If items are missing:**
 
 - Re-run with **high** enhancement level
@@ -322,4 +372,4 @@ Number|Description|Qty|Estimate Amount|Taxes|Replacement Cost Total|Age / Cond. 
 
 ---
 
-**Note**: This tool is designed for inventory PDFs with specific formatting. Results may vary with different document types. The automatic DPI selection ensures optimal balance between speed and accuracy for each enhancement level.
+**Note**: This tool is designed for inventory PDFs with specific formatting. Results may vary with different document types. The automatic DPI selection ensures optimal balance between speed and accuracy for each enhancement level. Use the test script to debug issues before processing large PDFs.
