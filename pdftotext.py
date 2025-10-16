@@ -5,6 +5,9 @@ import pytesseract
 from pdf2image import convert_from_path
 import re
 import time
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+import numpy as np
+import cv2
 
 # ============================================================================
 # PLATFORM-SPECIFIC CONFIGURATION
@@ -86,10 +89,89 @@ if TESSERACT_CMD:
 
 
 # ============================================================================
+# IMAGE PREPROCESSING FOR BETTER OCR
+# ============================================================================
+
+def preprocess_image_for_ocr(image, enhancement_level='medium'):
+    """
+    Preprocess image to improve OCR accuracy
+    
+    Args:
+        image: PIL Image object
+        enhancement_level: 'low', 'medium', or 'high' - level of preprocessing
+    
+    Returns:
+        PIL Image object (preprocessed)
+    """
+    
+    # Convert PIL Image to numpy array for OpenCV processing
+    img_array = np.array(image)
+    
+    # Convert to grayscale
+    if len(img_array.shape) == 3:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img_array
+    
+    if enhancement_level == 'low':
+        # Light preprocessing - just basic contrast enhancement
+        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(gray)
+        
+    elif enhancement_level == 'medium':
+        # Medium preprocessing - contrast + denoising + sharpening
+        
+        # Denoise
+        denoised = cv2.fastNlMeansDenoising(gray, h=10)
+        
+        # Apply CLAHE for better contrast
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(denoised)
+        
+        # Sharpen
+        kernel = np.array([[-1,-1,-1],
+                          [-1, 9,-1],
+                          [-1,-1,-1]])
+        enhanced = cv2.filter2D(enhanced, -1, kernel)
+        
+    else:  # 'high'
+        # Aggressive preprocessing - all techniques
+        
+        # Denoise
+        denoised = cv2.fastNlMeansDenoising(gray, h=10)
+        
+        # Apply CLAHE
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(denoised)
+        
+        # Adaptive thresholding for better text separation
+        enhanced = cv2.adaptiveThreshold(
+            enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 11, 2
+        )
+        
+        # Morphological operations to clean up
+        kernel = np.ones((1,1), np.uint8)
+        enhanced = cv2.morphologyEx(enhanced, cv2.MORPH_CLOSE, kernel)
+        
+        # Sharpen
+        kernel = np.array([[-1,-1,-1],
+                          [-1, 9,-1],
+                          [-1,-1,-1]])
+        enhanced = cv2.filter2D(enhanced, -1, kernel)
+    
+    # Convert back to PIL Image
+    processed_image = Image.fromarray(enhanced)
+    
+    return processed_image
+
+
+# ============================================================================
 # MAIN PDF TO EXCEL CONVERSION FUNCTIONS
 # ============================================================================
 
-def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, dpi=300, batch_size=20):
+def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, dpi=300, batch_size=20, ocr_enhancement='medium'):
     """
     Convert PDF to text using Tesseract OCR and format for Excel paste.
     
@@ -98,6 +180,7 @@ def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, dpi=300, batch_size=
         output_txt_path: Path for output text file (optional)
         dpi: DPI for PDF to image conversion (higher = better quality but slower)
         batch_size: Number of pages to process at once (to avoid memory issues)
+        ocr_enhancement: 'low', 'medium', or 'high' - level of image preprocessing
     
     Returns:
         Path to the output text file
@@ -111,6 +194,7 @@ def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, dpi=300, batch_size=
     print(f"Starting conversion of: {pdf_path}")
     print(f"Operating System: {platform.system()}")
     print(f"DPI Setting: {dpi}")
+    print(f"OCR Enhancement Level: {ocr_enhancement}")
     print(f"Batch size: {batch_size} pages at a time")
     print("=" * 60)
     
@@ -164,15 +248,21 @@ def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, dpi=300, batch_size=
             
             batch_time = time.time() - batch_start
             print(f"  ✓ Batch converted to images ({batch_time:.2f} seconds)")
-            print(f"  Processing {len(images)} pages with OCR...")
+            print(f"  Processing {len(images)} pages with enhanced OCR...")
             
             # Process each page in the batch
             for i, image in enumerate(images, page_num):
                 page_start = time.time()
-                print(f"    [Page {i}] Processing OCR...", end=" ", flush=True)
+                print(f"    [Page {i}] Preprocessing image...", end=" ", flush=True)
                 
-                # Perform OCR on the image
-                text = pytesseract.image_to_string(image, lang='eng')
+                # Preprocess image for better OCR
+                processed_image = preprocess_image_for_ocr(image, ocr_enhancement)
+                
+                print("OCR...", end=" ", flush=True)
+                
+                # Perform OCR with custom configuration for better accuracy
+                custom_config = r'--oem 3 --psm 6'  # OEM 3 = Default, PSM 6 = Assume uniform block of text
+                text = pytesseract.image_to_string(processed_image, lang='eng', config=custom_config)
                 
                 page_time = time.time() - page_start
                 print(f"✓ ({page_time:.2f}s)")
@@ -181,6 +271,7 @@ def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, dpi=300, batch_size=
                 
                 # Free memory
                 del image
+                del processed_image
             
             # Free memory
             del images
@@ -415,7 +506,7 @@ def format_item_line(item):
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("PDF to Excel-Ready Text Converter")
+    print("PDF to Excel-Ready Text Converter (Enhanced OCR)")
     print("=" * 60)
     
     # Get input filename from user
@@ -431,14 +522,26 @@ if __name__ == "__main__":
     # Create output filename
     output_file = f"{base_name}_output.txt"
     
+    # Ask for OCR enhancement level
+    print("\nOCR Enhancement Levels:")
+    print("  'low'    - Basic contrast enhancement (fastest)")
+    print("  'medium' - Contrast + denoising + sharpening (balanced)")
+    print("  'high'   - Aggressive preprocessing for difficult PDFs (slowest)")
+    
+    enhancement = input("\nSelect enhancement level (low/medium/high) [default: medium]: ").strip().lower()
+    if enhancement not in ['low', 'medium', 'high']:
+        enhancement = 'medium'
+        print(f"Using default: {enhancement}")
+    
     print(f"\nInput file: {pdf_file}")
     print(f"Output will be saved as: {base_name}_output.txt")
+    print(f"Enhancement level: {enhancement}")
     print()
     
     # Run the conversion with batch processing (20 pages at a time)
     try:
         total_start = time.time()
-        result = pdf_to_excel_ready_text(pdf_file, output_file, dpi=300, batch_size=20)
+        result = pdf_to_excel_ready_text(pdf_file, output_file, dpi=300, batch_size=20, ocr_enhancement=enhancement)
         total_time = time.time() - total_start
         
         print(f"\nTotal processing time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
