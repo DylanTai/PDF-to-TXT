@@ -182,18 +182,18 @@ If items are missing from the output, check:
 
 ```
 Number|Description|Qty|Estimate Amount|Taxes|Replacement Cost Total|Age / Cond. / Life|Less Depreciation|Actual Cash Value|Paid|Estimated Remaining
-1|DYPASA, Garbage Can 1.6 Gal with Foot Pedal - Stainless Steel|1.00 EA|$95.00|$7.96|$102.96|2 y/ Avg. /10 y|-$20.59|$82.37|$0.00|$20.59
-2|LuxenHome, 2 Pieces Metal Wall Art Multi-Color Circles Garnet|1.00 EA|$78.99|$6.62|$85.61|1.75 y/ Avg. /10 y|-$14.98|$70.63|$0.00|$14.98
-175|Aeropostale, Lightweight Quilted Puffer Vest|2.00 EA|$109.90|$4.81|$114.71|1.75 y/ Avg. /8 y|-$25.09|$89.62|$0.00|$25.09
+1|Samsung 55-inch LED Smart TV|1.00 EA|$450.00|$36.00|$486.00|3 y/ Good /7 y|-$150.00|$336.00|$0.00|$150.00
+2|Office Desk Chair - Ergonomic Black Leather|2.00 EA|$125.00|$10.00|$135.00|1 y/ Excellent /10 y|-$15.00|$120.00|$0.00|$15.00
+127|Wireless Bluetooth Speaker Portable|5.00 EA|$35.99|$2.88|$38.87|0.5 y/ New /5 y|-$4.50|$34.37|$0.00|$4.50
 ```
 
 ### After Importing to Excel
 
-| Number | Description                                                   | Qty     | Estimate Amount | Taxes | Replacement Cost Total | Age / Cond. / Life | Less Depreciation | Actual Cash Value | Paid  | Estimated Remaining |
-| ------ | ------------------------------------------------------------- | ------- | --------------- | ----- | ---------------------- | ------------------ | ----------------- | ----------------- | ----- | ------------------- |
-| 1      | DYPASA, Garbage Can 1.6 Gal with Foot Pedal - Stainless Steel | 1.00 EA | $95.00          | $7.96 | $102.96                | 2 y/ Avg. /10 y    | -$20.59           | $82.37            | $0.00 | $20.59              |
-| 2      | LuxenHome, 2 Pieces Metal Wall Art Multi-Color Circles Garnet | 1.00 EA | $78.99          | $6.62 | $85.61                 | 1.75 y/ Avg. /10 y | -$14.98           | $70.63            | $0.00 | $14.98              |
-| 175    | Aeropostale, Lightweight Quilted Puffer Vest                  | 2.00 EA | $109.90         | $4.81 | $114.71                | 1.75 y/ Avg. /8 y  | -$25.09           | $89.62            | $0.00 | $25.09              |
+| Number | Description                                 | Qty     | Estimate Amount | Taxes  | Replacement Cost Total | Age / Cond. / Life   | Less Depreciation | Actual Cash Value | Paid  | Estimated Remaining |
+| ------ | ------------------------------------------- | ------- | --------------- | ------ | ---------------------- | -------------------- | ----------------- | ----------------- | ----- | ------------------- |
+| 1      | Samsung 55-inch LED Smart TV                | 1.00 EA | $450.00         | $36.00 | $486.00                | 3 y/ Good /7 y       | -$150.00          | $336.00           | $0.00 | $150.00             |
+| 2      | Office Desk Chair - Ergonomic Black Leather | 2.00 EA | $125.00         | $10.00 | $135.00                | 1 y/ Excellent /10 y | -$15.00           | $120.00           | $0.00 | $15.00              |
+| 127    | Wireless Bluetooth Speaker Portable         | 5.00 EA | $35.99          | $2.88  | $38.87                 | 0.5 y/ New /5 y      | -$4.50            | $34.37            | $0.00 | $4.50               |
 
 ---
 
