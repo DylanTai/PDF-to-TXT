@@ -167,24 +167,45 @@ def preprocess_image_for_ocr(image, enhancement_level='medium'):
     return processed_image
 
 
+def get_dpi_for_enhancement_level(enhancement_level):
+    """
+    Get the appropriate DPI based on enhancement level
+    
+    Args:
+        enhancement_level: 'low', 'medium', or 'high'
+    
+    Returns:
+        int: DPI value
+    """
+    dpi_settings = {
+        'low': 200,      # Fast processing, good for high-quality PDFs
+        'medium': 300,   # Balanced quality and speed
+        'high': 400      # Best quality for difficult PDFs
+    }
+    
+    return dpi_settings.get(enhancement_level, 300)
+
+
 # ============================================================================
 # MAIN PDF TO EXCEL CONVERSION FUNCTIONS
 # ============================================================================
 
-def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, dpi=300, batch_size=20, ocr_enhancement='medium'):
+def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, batch_size=20, ocr_enhancement='medium'):
     """
     Convert PDF to text using Tesseract OCR and format for Excel paste.
     
     Args:
         pdf_path: Path to the PDF file
         output_txt_path: Path for output text file (optional)
-        dpi: DPI for PDF to image conversion (higher = better quality but slower)
         batch_size: Number of pages to process at once (to avoid memory issues)
         ocr_enhancement: 'low', 'medium', or 'high' - level of image preprocessing
     
     Returns:
         Path to the output text file
     """
+    
+    # Get DPI based on enhancement level
+    dpi = get_dpi_for_enhancement_level(ocr_enhancement)
     
     # Set output path if not provided
     if output_txt_path is None:
@@ -193,8 +214,8 @@ def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, dpi=300, batch_size=
     
     print(f"Starting conversion of: {pdf_path}")
     print(f"Operating System: {platform.system()}")
-    print(f"DPI Setting: {dpi}")
     print(f"OCR Enhancement Level: {ocr_enhancement}")
+    print(f"DPI Setting: {dpi} (auto-selected based on enhancement level)")
     print(f"Batch size: {batch_size} pages at a time")
     print("=" * 60)
     
@@ -524,9 +545,9 @@ if __name__ == "__main__":
     
     # Ask for OCR enhancement level
     print("\nOCR Enhancement Levels:")
-    print("  'low'    - Basic contrast enhancement (fastest)")
-    print("  'medium' - Contrast + denoising + sharpening (balanced)")
-    print("  'high'   - Aggressive preprocessing for difficult PDFs (slowest)")
+    print("  'low'    - Basic enhancement, DPI: 200 (fastest)")
+    print("  'medium' - Balanced enhancement, DPI: 300 (recommended)")
+    print("  'high'   - Aggressive enhancement, DPI: 400 (best quality, slowest)")
     
     enhancement = input("\nSelect enhancement level (low/medium/high) [default: medium]: ").strip().lower()
     if enhancement not in ['low', 'medium', 'high']:
@@ -541,7 +562,7 @@ if __name__ == "__main__":
     # Run the conversion with batch processing (20 pages at a time)
     try:
         total_start = time.time()
-        result = pdf_to_excel_ready_text(pdf_file, output_file, dpi=300, batch_size=20, ocr_enhancement=enhancement)
+        result = pdf_to_excel_ready_text(pdf_file, output_file, batch_size=20, ocr_enhancement=enhancement)
         total_time = time.time() - total_start
         
         print(f"\nTotal processing time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
