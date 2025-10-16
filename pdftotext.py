@@ -377,7 +377,10 @@ def process_for_excel(text):
                 processed_lines.append(format_item_line(item))
                 if item.get('number'):
                     try:
-                        items_found.append(int(item['number']))
+                        item_num = int(item['number'])
+                        # Only track reasonable item numbers (less than 100,000)
+                        if item_num < 100000:
+                            items_found.append(item_num)
                     except:
                         pass
             
@@ -395,18 +398,25 @@ def process_for_excel(text):
         print(f"  First item: {min(items_found)}")
         print(f"  Last item: {max(items_found)}")
         
-        # Check for gaps
-        missing = []
-        for i in range(min(items_found), max(items_found) + 1):
-            if i not in items_found:
-                missing.append(i)
+        # Only check for gaps if the range is reasonable (less than 50,000 items)
+        item_range = max(items_found) - min(items_found) + 1
         
-        if missing:
-            print(f"  ⚠ Warning: Missing {len(missing)} items")
-            if len(missing) <= 20:
-                print(f"  Missing items: {missing}")
-            else:
-                print(f"  Missing items include: {missing[:10]}... and {len(missing)-10} more")
+        if item_range < 50000:
+            # Check for gaps
+            missing = []
+            for i in range(min(items_found), max(items_found) + 1):
+                if i not in items_found:
+                    missing.append(i)
+            
+            if missing:
+                print(f"  ⚠ Warning: Missing {len(missing)} items")
+                if len(missing) <= 20:
+                    print(f"  Missing items: {missing}")
+                else:
+                    print(f"  Missing items include: {missing[:10]}... and {len(missing)-10} more")
+        else:
+            print(f"  ⚠ Item range too large ({item_range:,} items) - skipping gap analysis")
+            print(f"  Note: Some item numbers may be OCR errors (very large numbers)")
     
     return '\n'.join(processed_lines)
 
