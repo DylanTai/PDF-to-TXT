@@ -33,11 +33,7 @@ Each line represents one inventory item, with fields separated by `|` characters
 
 ## Files Included
 
-- `pdftotext.py` - Main script (works on both Windows and macOS)
-- `windows.py` - Windows-specific configuration
-- `mac.py` - macOS-specific configuration
-
-**Important**: All three files must be in the same directory!
+- `pdftotext.py` - Single script that works on both Windows and macOS
 
 ## Requirements
 
@@ -68,7 +64,7 @@ pip install pytesseract pdf2image pillow
 
 # Download and extract Poppler from:
 # https://github.com/oschwartz10612/poppler-windows/releases
-# Extract to C:\poppler (or update the path in windows.py)
+# Extract to C:\poppler (or update the path in pdftotext.py)
 ```
 
 ### Mac
@@ -86,32 +82,32 @@ pip3 install pytesseract pdf2image pillow
 
 ## Configuration
 
+The script automatically detects your operating system and configures paths accordingly.
+
 ### Windows
 
-If Tesseract or Poppler are installed in different locations, edit `windows.py`:
+If Tesseract or Poppler are installed in different locations, edit the `configure_paths()` function in `pdftotext.py`:
 
 ```python
-def configure_paths():
+if system == 'Windows':
     tesseract_cmd = r'C:\Your\Custom\Path\tesseract.exe'
     poppler_path = r'C:\Your\Custom\Path\poppler\Library\bin'
-    return tesseract_cmd, poppler_path
 ```
 
 ### Mac
 
-If Tesseract is not automatically detected, edit `mac.py`:
+The script automatically detects Tesseract on macOS. If it fails, edit the `configure_paths()` function:
 
 ```python
-def configure_paths():
+elif system == 'Darwin':
     tesseract_cmd = '/your/custom/path/tesseract'
     poppler_path = None
-    return tesseract_cmd, poppler_path
 ```
 
 ## Usage
 
-1. Place your PDF file in the same directory as the scripts
-2. Run the main script:
+1. Place your PDF file in the same directory as the script
+2. Run the script:
    - **Windows:** `python pdftotext.py`
    - **Mac:** `python3 pdftotext.py`
 3. Enter the filename when prompted (e.g., `inventory.pdf`)
@@ -150,14 +146,12 @@ result = pdf_to_excel_ready_text(pdf_file, output_file, dpi=200, batch_size=10)
 
 ### Windows
 
-- **"windows.py not found"**: Make sure all three files (`pdftotext.py`, `windows.py`, `mac.py`) are in the same directory
-- **"Tesseract not found"**: Update the path in `windows.py` to match your Tesseract installation
-- **"Poppler not found"**: Update the `poppler_path` in `windows.py` to match where you extracted Poppler
+- **"Tesseract not found"**: Update the path in the `configure_paths()` function to match your Tesseract installation
+- **"Poppler not found"**: Update the `poppler_path` in the `configure_paths()` function to match where you extracted Poppler
 
 ### Mac
 
-- **"mac.py not found"**: Make sure all three files (`pdftotext.py`, `windows.py`, `mac.py`) are in the same directory
-- **"Tesseract not found"**: Run `brew install tesseract` or update the path in `mac.py`
+- **"Tesseract not found"**: Run `brew install tesseract` or update the path in the `configure_paths()` function
 - **"Poppler not found"**: Run `brew install poppler`
 
 ### Both Platforms
