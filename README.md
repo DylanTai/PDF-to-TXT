@@ -4,25 +4,30 @@
 
 This program converts PDF files into Excel-ready text files using OCR (Optical Character Recognition). It's specifically designed to extract numbered inventory items from PDF documents and format them into pipe-delimited columns that can be easily imported into Excel.
 
-**NEW: Enhanced OCR with image preprocessing for improved accuracy!**
+**NEW: Enhanced OCR with automatic DPI selection and image preprocessing for improved accuracy!**
 
 ## What It Does
 
 1. **Reads PDF files** - Converts each page of your PDF into images
-2. **Enhances images** - Preprocesses images with denoising, contrast enhancement, and sharpening
-3. **Performs OCR** - Extracts text from the enhanced images using Tesseract OCR with optimized settings
-4. **Intelligent parsing** - Identifies numbered items by looking for unit markers (EA, PC, LB, OZ, etc.)
-5. **Formats for Excel** - Organizes data into columns separated by pipe (`|`) delimiters
-6. **Handles large files** - Processes PDFs in batches to avoid memory issues
-7. **Cross-platform** - Automatically detects and configures for Windows or macOS
+2. **Auto-adjusts quality** - Automatically selects optimal DPI based on enhancement level
+3. **Enhances images** - Preprocesses images with denoising, contrast enhancement, and sharpening
+4. **Performs OCR** - Extracts text from the enhanced images using Tesseract OCR with optimized settings
+5. **Intelligent parsing** - Identifies numbered items by looking for unit markers (EA, PC, LB, OZ, etc.)
+6. **Formats for Excel** - Organizes data into columns separated by pipe (`|`) delimiters
+7. **Handles large files** - Processes PDFs in batches to avoid memory issues
+8. **Cross-platform** - Automatically detects and configures for Windows or macOS
 
 ## OCR Enhancement Levels
 
-The program offers three levels of image preprocessing to improve OCR accuracy:
+The program offers three levels of enhancement with automatic DPI optimization:
 
-- **Low** - Basic contrast enhancement (fastest, good for high-quality PDFs)
-- **Medium** - Contrast + denoising + sharpening (balanced, recommended for most PDFs)
-- **High** - Aggressive preprocessing with adaptive thresholding (slowest, best for poor-quality or scanned PDFs)
+| Level      | DPI | Image Processing                                    | Speed    | Best For                     |
+| ---------- | --- | --------------------------------------------------- | -------- | ---------------------------- |
+| **Low**    | 200 | Basic contrast enhancement                          | Fastest  | High-quality, clear PDFs     |
+| **Medium** | 300 | Contrast + denoising + sharpening                   | Balanced | Most PDFs (recommended)      |
+| **High**   | 400 | Aggressive preprocessing with adaptive thresholding | Slowest  | Poor-quality or scanned PDFs |
+
+**DPI is automatically selected** - you just choose the enhancement level!
 
 ## Output Format
 
@@ -123,6 +128,7 @@ elif system == 'Darwin':
    - **Mac:** `python3 pdftotext.py`
 3. Enter the filename when prompted (e.g., `inventory.pdf`)
 4. **Choose an OCR enhancement level** (low/medium/high)
+   - DPI is automatically selected based on your choice
 5. Wait for processing to complete
 6. Find the output file: `yourfilename_output.txt`
 
@@ -134,11 +140,16 @@ elif system == 'Darwin':
 Enter the PDF filename (e.g., name_of_pdf.pdf): inventory.pdf
 
 OCR Enhancement Levels:
-  'low'    - Basic contrast enhancement (fastest)
-  'medium' - Contrast + denoising + sharpening (balanced)
-  'high'   - Aggressive preprocessing for difficult PDFs (slowest)
+  'low'    - Basic enhancement, DPI: 200 (fastest)
+  'medium' - Balanced enhancement, DPI: 300 (recommended)
+  'high'   - Aggressive enhancement, DPI: 400 (best quality, slowest)
 
 Select enhancement level (low/medium/high) [default: medium]: medium
+
+Starting conversion of: inventory.pdf
+Operating System: Darwin
+OCR Enhancement Level: medium
+DPI Setting: 300 (auto-selected based on enhancement level)
 ```
 
 ## Importing into Excel
@@ -157,43 +168,54 @@ Your data will now be properly split into columns!
 ## Performance Tips
 
 - **Large PDFs (100+ pages)**: The script processes in batches of 20 pages to avoid memory issues
-- **Low-quality PDFs**: Use 'high' enhancement level for better accuracy (slower)
-- **High-quality PDFs**: Use 'low' or 'medium' enhancement level for faster processing
-- **Slow processing**: Lower the DPI from 300 to 200 for faster results
-- **Memory errors**: Reduce batch size from 20 to 10 pages
-- **Processing time**:
-  - Low enhancement: ~2-4 seconds per page
-  - Medium enhancement: ~3-6 seconds per page
-  - High enhancement: ~4-8 seconds per page
+- **Choose the right level**:
+  - Start with **medium** for most PDFs
+  - Use **low** if processing is too slow and your PDF is already clear
+  - Use **high** if you're missing items or text quality is poor
+- **Memory errors**: Reduce batch size from 20 to 10 pages by editing the script
+- **Processing time estimates** (per page):
 
-To adjust settings, modify the last line of `pdftotext.py`:
+| Level  | DPI | Time per Page |
+| ------ | --- | ------------- |
+| Low    | 200 | 1-3 seconds   |
+| Medium | 300 | 3-6 seconds   |
+| High   | 400 | 6-12 seconds  |
+
+To manually adjust batch size, modify the function call at the bottom of `pdftotext.py`:
 
 ```python
-result = pdf_to_excel_ready_text(pdf_file, output_file, dpi=200, batch_size=10, ocr_enhancement='low')
+result = pdf_to_excel_ready_text(pdf_file, output_file, batch_size=10, ocr_enhancement=enhancement)
 ```
 
 ## OCR Enhancement Details
 
-### Low Enhancement
+### Low Enhancement (DPI: 200)
 
 - **Best for**: Clean, high-quality PDFs with clear text
-- **Speed**: Fastest
+- **Speed**: Fastest (~1-3 seconds per page)
 - **Techniques**: CLAHE contrast enhancement
-- **Use when**: Text is already very readable in the PDF
+- **Image processing**: Minimal
+- **Use when**: Text is already very readable in the PDF, speed is priority
 
-### Medium Enhancement (Recommended)
+### Medium Enhancement (DPI: 300) - Recommended
 
 - **Best for**: Most PDFs with standard quality
-- **Speed**: Balanced
+- **Speed**: Balanced (~3-6 seconds per page)
 - **Techniques**: Denoising + CLAHE + Sharpening
-- **Use when**: General purpose, unsure about PDF quality
+- **Image processing**: Moderate
+- **Use when**: General purpose, unsure about PDF quality, or starting point
 
-### High Enhancement
+### High Enhancement (DPI: 400)
 
-- **Best for**: Poor-quality scans, faded text, or noisy images
-- **Speed**: Slowest but most accurate for difficult PDFs
+- **Best for**: Poor-quality scans, faded text, noisy images, or when items are missing
+- **Speed**: Slowest but most accurate (~6-12 seconds per page)
 - **Techniques**: Adaptive thresholding + morphological operations + denoising + CLAHE + sharpening
-- **Use when**: OCR is missing many items with lower settings
+- **Image processing**: Aggressive
+- **Use when**:
+  - OCR is missing many items with lower settings
+  - PDF contains scanned documents
+  - Text is faint or has artifacts
+  - Small font sizes
 
 ## Troubleshooting
 
@@ -212,33 +234,53 @@ result = pdf_to_excel_ready_text(pdf_file, output_file, dpi=200, batch_size=10, 
 ### Both Platforms
 
 - **Missing items in output**:
-  - Try a higher enhancement level ('high')
-  - Check the console output for statistics on missing items
-  - Increase DPI to 400 or 600 for small text
-- **Memory errors**: Reduce batch size or DPI in the function call at the bottom of `pdftotext.py`
+  1. First, try **high** enhancement level
+  2. Check the console output for statistics on missing items
+  3. Verify items have unit markers (EA, PC, LB, etc.)
+- **Memory errors**:
+  - Reduce batch size to 10 or 5 in the script
+  - Close other applications to free up RAM
+  - Process smaller sections of the PDF at a time
 - **Incorrect column splitting**: Verify that items contain unit markers (EA, PC, LB, etc.)
-- **OCR accuracy issues**:
-  - Try different enhancement levels
-  - Increase DPI (300-600)
+- **Too slow**:
+  - Use **low** enhancement level
+  - Process fewer pages at once
+- **Still poor accuracy on high**:
   - Check original PDF quality
+  - Consider re-scanning the document at higher resolution
+  - Some PDFs may have formatting that's incompatible with the parser
 
 ## Limitations
 
 - Only processes items that contain unit measurements (EA, PC, LB, OZ, PK)
-- OCR accuracy depends on PDF quality (300 DPI recommended, higher for poor quality)
+- OCR accuracy depends on PDF quality
 - Very large numbers (1000+) may have OCR errors with commas
 - Requires consistent formatting in the original PDF
-- Processing time increases with higher enhancement levels
+- Processing time increases with higher enhancement levels and DPI
+- Memory usage increases with higher DPI settings
 
 ## Support
 
 If items are missing from the output, try these steps in order:
 
-1. Use a higher enhancement level ('high' instead of 'medium')
-2. Increase DPI to 400 or 600 (slower but more accurate)
-3. Check that items contain unit markers (EA, PC, etc.)
-4. Review the console output for missing item numbers
-5. Verify original PDF quality and resolution
+1. **Switch to 'high' enhancement level** - This automatically uses 400 DPI and aggressive preprocessing
+2. **Check console statistics** - Look for which item numbers are missing
+3. **Verify unit markers** - Ensure items have EA, PC, LB, OZ, or PK in them
+4. **Review PDF quality** - Open the original PDF and check if text is readable
+5. **Check formatting** - Ensure item numbers are followed by periods (e.g., "175.")
+
+### Decision Tree for Enhancement Level
+
+```
+Is your PDF clear and high-quality?
+├─ Yes → Start with LOW (fastest)
+│  └─ Missing items? → Try MEDIUM
+│     └─ Still missing? → Try HIGH
+│
+└─ No/Unsure → Start with MEDIUM (recommended)
+   └─ Missing items? → Try HIGH
+      └─ Still issues? → Check PDF quality/formatting
+```
 
 ## Example Output
 
@@ -259,14 +301,25 @@ Number|Description|Qty|Estimate Amount|Taxes|Replacement Cost Total|Age / Cond. 
 | 2      | Office Desk Chair - Ergonomic Black Leather | 2.00 EA | $125.00         | $10.00 | $135.00                | 1 y/ Excellent /10 y | -$15.00           | $120.00           | $0.00 | $15.00              |
 | 127    | Wireless Bluetooth Speaker Portable         | 5.00 EA | $35.99          | $2.88  | $38.87                 | 0.5 y/ New /5 y      | -$4.50            | $34.37            | $0.00 | $4.50               |
 
-## What's New in Enhanced Version
+## Quick Start Guide
 
-- ✨ **Image Preprocessing**: Denoising, contrast enhancement, and sharpening for better OCR
-- ✨ **Three Enhancement Levels**: Choose based on your PDF quality
-- ✨ **Optimized Tesseract Settings**: Better OCR engine configuration
-- ✨ **Improved Accuracy**: Especially for poor-quality or scanned PDFs
-- ✨ **Smart Processing**: Automatically adjusts preprocessing based on selected level
+**For most users:**
+
+1. Install requirements (see Installation section)
+2. Run `python3 pdftotext.py` (Mac) or `python pdftotext.py` (Windows)
+3. Enter your PDF filename
+4. Choose **medium** enhancement level
+5. Wait for processing
+6. Import the output .txt file into Excel using Text to Columns with `|` delimiter
+
+**If items are missing:**
+
+- Re-run with **high** enhancement level
+
+**If processing is too slow:**
+
+- Re-run with **low** enhancement level
 
 ---
 
-**Note**: This tool is designed for inventory PDFs with specific formatting. Results may vary with different document types. For best results with difficult PDFs, use 'high' enhancement level and higher DPI (400-600).
+**Note**: This tool is designed for inventory PDFs with specific formatting. Results may vary with different document types. The automatic DPI selection ensures optimal balance between speed and accuracy for each enhancement level.
