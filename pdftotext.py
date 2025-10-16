@@ -88,9 +88,78 @@ if TESSERACT_CMD:
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 
+# Export these for use by test script
+__all__ = [
+    'configure_paths',
+    'remove_watermark',
+    'preprocess_image_for_ocr',
+    'get_dpi_for_enhancement_level',
+    'process_for_excel',
+    'extract_item_from_buffer',
+    'parse_data_fields',
+    'format_item_line',
+    'TESSERACT_CMD',
+    'POPPLER_PATH'
+]
+
+
 # ============================================================================
 # IMAGE PREPROCESSING FOR BETTER OCR
 # ============================================================================
+
+def remove_watermark(image):
+    """
+    Remove watermark/draft text from image
+    """
+    img_array = np.array(image)
+    
+    # Convert to grayscale if needed
+    if len(img_array.shape) == 3:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img_array
+    
+    # Apply binary threshold to separate text from background
+    # Use Otsu's method for automatic threshold
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Invert if needed (text should be black on white)
+    if np.mean(binary) < 127:
+        binary = cv2.bitwise_not(binary)
+    
+    # Use morphological operations to remove large faint text (watermark)
+    # while preserving small dark text (actual content)
+    
+    # Create a kernel for morphological operations
+    kernel = np.ones((3, 3), np.uint8)
+    
+    # Apply morphological closing to connect nearby text
+    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+    
+    # Find contours
+    contours, _ = cv2.findContours(cv2.bitwise_not(closed), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Create mask to remove large, low-contrast elements (watermark)
+    mask = np.ones_like(gray) * 255
+    
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        x, y, w, h = cv2.boundingRect(contour)
+        
+        # Remove very large components (likely watermark)
+        # Watermarks are typically large and cover significant area
+        if area > 50000 or (w > 500 and h > 200):
+            cv2.drawContours(mask, [contour], -1, 0, -1)
+    
+    # Apply mask
+    result = cv2.bitwise_and(gray, gray, mask=mask)
+    
+    # Enhance contrast after watermark removal
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    result = clahe.apply(result)
+    
+    return Image.fromarray(result)
+
 
 def preprocess_image_for_ocr(image, enhancement_level='medium'):
     """
@@ -104,14 +173,14 @@ def preprocess_image_for_ocr(image, enhancement_level='medium'):
         PIL Image object (preprocessed)
     """
     
+    # First, try to remove watermark
+    image = remove_watermark(image)
+    
     # Convert PIL Image to numpy array for OpenCV processing
     img_array = np.array(image)
     
-    # Convert to grayscale
-    if len(img_array.shape) == 3:
-        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-    else:
-        gray = img_array
+    # Already grayscale from watermark removal
+    gray = img_array
     
     if enhancement_level == 'low':
         # Light preprocessing - just basic contrast enhancement

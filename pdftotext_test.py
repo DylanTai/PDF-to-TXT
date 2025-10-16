@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 import time
 from PIL import Image
+import shutil
 
 # Import functions from the main pdftotext.py file
 try:
@@ -23,7 +24,7 @@ except ImportError as e:
     sys.exit(1)
 
 import pytesseract
-from pdf2image import convert_from_path
+from pdf2image import convert_from_path, pdfinfo_from_path
 
 # Use the configured paths from pdftotext.py
 if TESSERACT_CMD:
@@ -34,14 +35,13 @@ if TESSERACT_CMD:
 # TEST PROCESSING FUNCTION
 # ============================================================================
 
-def test_pdf_processing(pdf_path, ocr_enhancement='medium', num_pages=10):
+def test_pdf_processing(pdf_path, ocr_enhancement='medium'):
     """
-    Test PDF processing on first N pages only
+    Test PDF processing on first and last pages only
     
     Args:
         pdf_path: Path to the PDF file
         ocr_enhancement: 'low', 'medium', or 'high'
-        num_pages: Number of pages to process (default: 10)
     
     Returns:
         Path to the test_files directory
@@ -49,54 +49,107 @@ def test_pdf_processing(pdf_path, ocr_enhancement='medium', num_pages=10):
     
     # Create test_files directory
     test_dir = Path('test_files')
-    test_dir.mkdir(exist_ok=True)
+    if not test_dir.exists():
+        print(f"\n✗ Error: 'test_files' directory does not exist!")
+        print("Please create it first: mkdir test_files")
+        sys.exit(1)
     
     # Create subdirectories
     images_dir = test_dir / 'preprocessed_images'
+    
+    # Clear and recreate the preprocessed_images directory
+    if images_dir.exists():
+        print(f"\nCleaning up old images in {images_dir}...")
+        shutil.rmtree(images_dir)
+        print(f"  ✓ Removed old images")
+    
     images_dir.mkdir(exist_ok=True)
+    print(f"  ✓ Created fresh preprocessed_images directory\n")
     
     dpi = get_dpi_for_enhancement_level(ocr_enhancement)
     
-    print(f"\n{'='*60}")
-    print(f"TEST MODE - Processing first {num_pages} pages only")
+    # Get total number of pages
+    try:
+        if POPPLER_PATH:
+            info = pdfinfo_from_path(pdf_path, poppler_path=POPPLER_PATH)
+        else:
+            info = pdfinfo_from_path(pdf_path)
+        total_pages = info['Pages']
+    except Exception as e:
+        print(f"\n✗ Error: Could not get PDF info: {e}")
+        sys.exit(1)
+    
+    print(f"{'='*60}")
+    print(f"TEST MODE - Processing first and last pages only")
     print(f"{'='*60}")
     print(f"PDF: {pdf_path}")
+    print(f"Total pages: {total_pages}")
+    print(f"Processing pages: 1 and {total_pages}")
     print(f"Enhancement: {ocr_enhancement}")
     print(f"DPI: {dpi}")
     print(f"Output directory: {test_dir}")
     print(f"{'='*60}\n")
     
-    # Convert first N pages
-    print(f"Converting first {num_pages} pages to images...")
+    # Process first page
+    print(f"Converting page 1...")
     start_time = time.time()
     
     if POPPLER_PATH:
-        images = convert_from_path(
+        first_page_image = convert_from_path(
             pdf_path, 
             dpi=dpi,
             first_page=1,
-            last_page=num_pages,
+            last_page=1,
             poppler_path=POPPLER_PATH
         )
     else:
-        images = convert_from_path(
+        first_page_image = convert_from_path(
             pdf_path, 
             dpi=dpi,
             first_page=1,
-            last_page=num_pages
+            last_page=1
         )
     
     conversion_time = time.time() - start_time
-    print(f"✓ Converted {len(images)} pages in {conversion_time:.2f} seconds\n")
+    print(f"✓ Converted page 1 in {conversion_time:.2f} seconds\n")
+    
+    # Process last page
+    print(f"Converting page {total_pages}...")
+    start_time = time.time()
+    
+    if POPPLER_PATH:
+        last_page_image = convert_from_path(
+            pdf_path, 
+            dpi=dpi,
+            first_page=total_pages,
+            last_page=total_pages,
+            poppler_path=POPPLER_PATH
+        )
+    else:
+        last_page_image = convert_from_path(
+            pdf_path, 
+            dpi=dpi,
+            first_page=total_pages,
+            last_page=total_pages
+        )
+    
+    conversion_time = time.time() - start_time
+    print(f"✓ Converted page {total_pages} in {conversion_time:.2f} seconds\n")
+    
+    # Combine images for processing
+    images_to_process = [
+        (1, first_page_image[0]),
+        (total_pages, last_page_image[0])
+    ]
     
     # Process each page
     raw_text_all = []
     
-    for i, image in enumerate(images, 1):
-        print(f"Processing page {i}/{len(images)}...")
+    for page_num, image in images_to_process:
+        print(f"Processing page {page_num}...")
         
         # Save original image
-        original_path = images_dir / f'page_{i:02d}_original.png'
+        original_path = images_dir / f'page_{page_num:04d}_original.png'
         image.save(original_path)
         print(f"  ✓ Saved original: {original_path}")
         
@@ -104,7 +157,7 @@ def test_pdf_processing(pdf_path, ocr_enhancement='medium', num_pages=10):
         processed_image = preprocess_image_for_ocr(image, ocr_enhancement)
         
         # Save preprocessed image
-        processed_path = images_dir / f'page_{i:02d}_preprocessed.png'
+        processed_path = images_dir / f'page_{page_num:04d}_preprocessed.png'
         processed_image.save(processed_path)
         print(f"  ✓ Saved preprocessed: {processed_path}")
         
@@ -112,7 +165,7 @@ def test_pdf_processing(pdf_path, ocr_enhancement='medium', num_pages=10):
         custom_config = r'--oem 3 --psm 6'
         text = pytesseract.image_to_string(processed_image, lang='eng', config=custom_config)
         raw_text_all.append(f"\n{'='*60}\n")
-        raw_text_all.append(f"PAGE {i}\n")
+        raw_text_all.append(f"PAGE {page_num}\n")
         raw_text_all.append(f"{'='*60}\n")
         raw_text_all.append(text)
         
@@ -124,7 +177,8 @@ def test_pdf_processing(pdf_path, ocr_enhancement='medium', num_pages=10):
         del processed_image
     
     # Free memory
-    del images
+    del first_page_image
+    del last_page_image
     
     # Save raw OCR text
     raw_text_path = test_dir / 'raw_ocr_text.txt'
@@ -160,7 +214,7 @@ def test_pdf_processing(pdf_path, ocr_enhancement='medium', num_pages=10):
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("PDF OCR TEST MODE - First 10 Pages Only")
+    print("PDF OCR TEST MODE - First and Last Pages Only")
     print("=" * 60)
     
     # Get input filename
@@ -189,7 +243,7 @@ if __name__ == "__main__":
     # Run the test
     try:
         total_start = time.time()
-        result = test_pdf_processing(pdf_file, ocr_enhancement=enhancement, num_pages=10)
+        result = test_pdf_processing(pdf_file, ocr_enhancement=enhancement)
         total_time = time.time() - total_start
         
         print(f"\n✓ Total test time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
