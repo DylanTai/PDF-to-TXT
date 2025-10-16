@@ -1,36 +1,93 @@
 import sys
 import platform
 from pathlib import Path
-
-# Detect operating system and import appropriate configuration
-if platform.system() == 'Windows':
-    try:
-        from windows import configure_paths
-    except ImportError:
-        print("Error: windows.py not found!")
-        print("Make sure windows.py is in the same directory as pdftotext.py")
-        sys.exit(1)
-elif platform.system() == 'Darwin':  # macOS
-    try:
-        from mac import configure_paths
-    except ImportError:
-        print("Error: mac.py not found!")
-        print("Make sure mac.py is in the same directory as pdftotext.py")
-        sys.exit(1)
-else:
-    print(f"Unsupported operating system: {platform.system()}")
-    sys.exit(1)
-
 import pytesseract
 from pdf2image import convert_from_path
 import re
 import time
+
+# ============================================================================
+# PLATFORM-SPECIFIC CONFIGURATION
+# ============================================================================
+
+def configure_paths():
+    """
+    Configure Tesseract and Poppler paths based on operating system
+    
+    Returns:
+        tuple: (tesseract_cmd, poppler_path)
+    """
+    
+    system = platform.system()
+    
+    if system == 'Windows':
+        # Windows Configuration
+        tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        poppler_path = r'C:\poppler\Library\bin'
+        
+        print("\nWindows Configuration:")
+        print(f"  Tesseract: {tesseract_cmd}")
+        print(f"  Poppler: {poppler_path}")
+        print("\nIf these paths are incorrect, edit the configure_paths() function.")
+        
+        return tesseract_cmd, poppler_path
+        
+    elif system == 'Darwin':  # macOS
+        # macOS Configuration - try to auto-detect Tesseract
+        import subprocess
+        import os
+        
+        tesseract_cmd = None
+        try:
+            # Try to find Tesseract using 'which'
+            result = subprocess.run(['which', 'tesseract'], 
+                                  capture_output=True, 
+                                  text=True, 
+                                  check=True)
+            tesseract_cmd = result.stdout.strip()
+        except:
+            # If 'which' fails, try common installation paths
+            common_paths = [
+                '/opt/homebrew/bin/tesseract',  # Apple Silicon Macs
+                '/usr/local/bin/tesseract',      # Intel Macs
+            ]
+            
+            for path in common_paths:
+                if os.path.exists(path):
+                    tesseract_cmd = path
+                    break
+        
+        # Poppler is usually in PATH on Mac, so we don't need to specify it
+        poppler_path = None
+        
+        print("\nmacOS Configuration:")
+        if tesseract_cmd:
+            print(f"  Tesseract: {tesseract_cmd}")
+        else:
+            print("  Tesseract: Using system PATH")
+            print("  ⚠ Warning: Tesseract not found in common locations")
+            print("  Make sure it's installed: brew install tesseract")
+        
+        print(f"  Poppler: Using system PATH")
+        print("\nIf Tesseract path is incorrect, edit the configure_paths() function.")
+        
+        return tesseract_cmd, poppler_path
+        
+    else:
+        print(f"Unsupported operating system: {system}")
+        print("This script supports Windows and macOS only.")
+        sys.exit(1)
+
 
 # Configure paths based on OS
 TESSERACT_CMD, POPPLER_PATH = configure_paths()
 if TESSERACT_CMD:
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
+
+# ============================================================================
+# MAIN PDF TO EXCEL CONVERSION FUNCTIONS
+# ============================================================================
 
 def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, dpi=300, batch_size=20):
     """
@@ -352,7 +409,10 @@ def format_item_line(item):
     return result
 
 
-# Main program
+# ============================================================================
+# MAIN PROGRAM
+# ============================================================================
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("PDF to Excel-Ready Text Converter")
