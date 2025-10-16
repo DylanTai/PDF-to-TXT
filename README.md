@@ -11,6 +11,7 @@ This program converts PDF files into Excel-ready text files using OCR (Optical C
 3. **Intelligent parsing** - Identifies numbered items by looking for unit markers (EA, PC, LB, OZ, etc.)
 4. **Formats for Excel** - Organizes data into columns separated by pipe (`|`) delimiters
 5. **Handles large files** - Processes PDFs in batches to avoid memory issues
+6. **Cross-platform** - Automatically detects and configures for Windows or macOS
 
 ## Output Format
 
@@ -32,8 +33,11 @@ Each line represents one inventory item, with fields separated by `|` characters
 
 ## Files Included
 
-- `pdftotext_windows.py` - Version for Windows
-- `pdftotext_mac.py` - Version for macOS
+- `pdftotext.py` - Main script (works on both Windows and macOS)
+- `windows.py` - Windows-specific configuration
+- `mac.py` - macOS-specific configuration
+
+**Important**: All three files must be in the same directory!
 
 ## Requirements
 
@@ -64,6 +68,7 @@ pip install pytesseract pdf2image pillow
 
 # Download and extract Poppler from:
 # https://github.com/oschwartz10612/poppler-windows/releases
+# Extract to C:\poppler (or update the path in windows.py)
 ```
 
 ### Mac
@@ -79,15 +84,41 @@ brew install tesseract poppler python3
 pip3 install pytesseract pdf2image pillow
 ```
 
+## Configuration
+
+### Windows
+
+If Tesseract or Poppler are installed in different locations, edit `windows.py`:
+
+```python
+def configure_paths():
+    tesseract_cmd = r'C:\Your\Custom\Path\tesseract.exe'
+    poppler_path = r'C:\Your\Custom\Path\poppler\Library\bin'
+    return tesseract_cmd, poppler_path
+```
+
+### Mac
+
+If Tesseract is not automatically detected, edit `mac.py`:
+
+```python
+def configure_paths():
+    tesseract_cmd = '/your/custom/path/tesseract'
+    poppler_path = None
+    return tesseract_cmd, poppler_path
+```
+
 ## Usage
 
-1. Place your PDF file in the same directory as the script
-2. Run the script:
-   - **Windows:** `python pdftotext_windows.py`
-   - **Mac:** `python3 pdftotext_mac.py`
+1. Place your PDF file in the same directory as the scripts
+2. Run the main script:
+   - **Windows:** `python pdftotext.py`
+   - **Mac:** `python3 pdftotext.py`
 3. Enter the filename when prompted (e.g., `inventory.pdf`)
 4. Wait for processing to complete
 5. Find the output file: `yourfilename_output.txt`
+
+**The script will automatically detect your operating system and use the appropriate configuration!**
 
 ## Importing into Excel
 
@@ -109,22 +140,30 @@ Your data will now be properly split into columns!
 - **Memory errors**: Reduce batch size from 20 to 10 pages
 - **Processing time**: Expect approximately 2-5 seconds per page depending on your computer
 
+To adjust settings, modify the last line of `pdftotext.py`:
+
+```python
+result = pdf_to_excel_ready_text(pdf_file, output_file, dpi=200, batch_size=10)
+```
+
 ## Troubleshooting
 
 ### Windows
 
-- **"Tesseract not found"**: Update the path in line 8 of the script to match your Tesseract installation
-- **"Poppler not found"**: Update the `POPPLER_PATH` variable in line 11 to match where you extracted Poppler
+- **"windows.py not found"**: Make sure all three files (`pdftotext.py`, `windows.py`, `mac.py`) are in the same directory
+- **"Tesseract not found"**: Update the path in `windows.py` to match your Tesseract installation
+- **"Poppler not found"**: Update the `poppler_path` in `windows.py` to match where you extracted Poppler
 
 ### Mac
 
-- **"Tesseract not found"**: Run `which tesseract` and update line 8 with the correct path
+- **"mac.py not found"**: Make sure all three files (`pdftotext.py`, `windows.py`, `mac.py`) are in the same directory
+- **"Tesseract not found"**: Run `brew install tesseract` or update the path in `mac.py`
 - **"Poppler not found"**: Run `brew install poppler`
 
 ### Both Platforms
 
 - **Missing items in output**: Check the console output for statistics on missing items
-- **Memory errors**: Reduce batch size or DPI in the function call at the bottom of the script
+- **Memory errors**: Reduce batch size or DPI in the function call at the bottom of `pdftotext.py`
 - **Incorrect column splitting**: Verify that items contain unit markers (EA, PC, LB, etc.)
 
 ## Limitations
