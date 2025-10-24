@@ -1,0 +1,9 @@
+#Ignore everything
+*
+
+#EXCEPT these files
+!.gitignore
+!README.md
+!pdftotext_test.py
+!pdftotext.py
+!requirements.txt

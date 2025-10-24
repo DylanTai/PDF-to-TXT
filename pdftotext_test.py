@@ -1,21 +1,20 @@
 import sys
 from pathlib import Path
 import time
-from PIL import Image
 import shutil
 
 # Import functions from the main pdftotext.py file
 try:
     from pdftotext import (
-        configure_paths,
         preprocess_image_for_ocr,
         get_dpi_for_enhancement_level,
         process_for_excel,
         extract_item_from_buffer,
         parse_data_fields,
         format_item_line,
-        TESSERACT_CMD,
-        POPPLER_PATH
+        get_textract_client,
+        textract_detect_text,
+        POPPLER_PATH,
     )
 except ImportError as e:
     print("Error: Could not import from pdftotext.py")
@@ -23,25 +22,22 @@ except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-import pytesseract
 from pdf2image import convert_from_path, pdfinfo_from_path
-
-# Use the configured paths from pdftotext.py
-if TESSERACT_CMD:
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 
 # ============================================================================
 # TEST PROCESSING FUNCTION
 # ============================================================================
 
-def test_pdf_processing(pdf_path, ocr_enhancement='medium'):
+def test_pdf_processing(pdf_path, ocr_enhancement='medium', textract_client=None):
     """
-    Test PDF processing on first and last pages only
+    Test PDF processing on up to the first 10 and last 10 pages.
+    Uses Amazon Textract for OCR so AWS credentials must be configured.
     
     Args:
         pdf_path: Path to the PDF file
         ocr_enhancement: 'low', 'medium', or 'high'
+        textract_client: Optional Textract client (pass stub for unit tests)
     
     Returns:
         Path to the test_files directory
@@ -67,6 +63,7 @@ def test_pdf_processing(pdf_path, ocr_enhancement='medium'):
     print(f"  ✓ Created fresh preprocessed_images directory\n")
     
     dpi = get_dpi_for_enhancement_level(ocr_enhancement)
+    textract_client = textract_client or get_textract_client()
     
     # Get total number of pages
     try:
@@ -79,68 +76,52 @@ def test_pdf_processing(pdf_path, ocr_enhancement='medium'):
         print(f"\n✗ Error: Could not get PDF info: {e}")
         sys.exit(1)
     
+    head_pages = list(range(1, min(total_pages, 10) + 1))
+    tail_start = max(1, total_pages - 9)
+    tail_pages = list(range(tail_start, total_pages + 1))
+    pages_to_process = sorted(set(head_pages + tail_pages))
+
     print(f"{'='*60}")
-    print(f"TEST MODE - Processing first and last pages only")
+    print(f"TEST MODE - Processing {len(pages_to_process)} page(s)")
     print(f"{'='*60}")
     print(f"PDF: {pdf_path}")
     print(f"Total pages: {total_pages}")
-    print(f"Processing pages: 1 and {total_pages}")
+    print(f"Processing pages: {pages_to_process}")
     print(f"Enhancement: {ocr_enhancement}")
     print(f"DPI: {dpi}")
+    print(f"AWS Textract Region: {getattr(textract_client.meta, 'region_name', 'unknown')}")
     print(f"Output directory: {test_dir}")
     print(f"{'='*60}\n")
     
-    # Process first page
-    print(f"Converting page 1...")
-    start_time = time.time()
-    
-    if POPPLER_PATH:
-        first_page_image = convert_from_path(
-            pdf_path, 
-            dpi=dpi,
-            first_page=1,
-            last_page=1,
-            poppler_path=POPPLER_PATH
-        )
-    else:
-        first_page_image = convert_from_path(
-            pdf_path, 
-            dpi=dpi,
-            first_page=1,
-            last_page=1
-        )
-    
-    conversion_time = time.time() - start_time
-    print(f"✓ Converted page 1 in {conversion_time:.2f} seconds\n")
-    
-    # Process last page
-    print(f"Converting page {total_pages}...")
-    start_time = time.time()
-    
-    if POPPLER_PATH:
-        last_page_image = convert_from_path(
-            pdf_path, 
-            dpi=dpi,
-            first_page=total_pages,
-            last_page=total_pages,
-            poppler_path=POPPLER_PATH
-        )
-    else:
-        last_page_image = convert_from_path(
-            pdf_path, 
-            dpi=dpi,
-            first_page=total_pages,
-            last_page=total_pages
-        )
-    
-    conversion_time = time.time() - start_time
-    print(f"✓ Converted page {total_pages} in {conversion_time:.2f} seconds\n")
-    
-    # Combine images for processing
-    images_to_process = [
-        (1, first_page_image[0]),
-        (total_pages, last_page_image[0])
-    ]
+    images_to_process = []
+
+    for page_num in pages_to_process:
+        print(f"Converting page {page_num}...")
+        start_time = time.time()
+
+        if POPPLER_PATH:
+            page_images = convert_from_path(
+                pdf_path,
+                dpi=dpi,
+                first_page=page_num,
+                last_page=page_num,
+                poppler_path=POPPLER_PATH
+            )
+        else:
+            page_images = convert_from_path(
+                pdf_path,
+                dpi=dpi,
+                first_page=page_num,
+                last_page=page_num
+            )
+
+        conversion_time = time.time() - start_time
+        print(f"✓ Converted page {page_num} in {conversion_time:.2f} seconds\n")
+
+        if page_images:
+            images_to_process.append((page_num, page_images[0]))
+
+        del page_images
     
     # Process each page
     raw_text_all = []
@@ -161,24 +142,19 @@ def test_pdf_processing(pdf_path, ocr_enhancement='medium'):
         processed_image.save(processed_path)
         print(f"  ✓ Saved preprocessed: {processed_path}")
         
-        # Perform OCR
-        custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(processed_image, lang='eng', config=custom_config)
+        # Perform OCR with Textract
+        text = textract_detect_text(processed_image, textract_client=textract_client)
         raw_text_all.append(f"\n{'='*60}\n")
         raw_text_all.append(f"PAGE {page_num}\n")
         raw_text_all.append(f"{'='*60}\n")
         raw_text_all.append(text)
         
-        print(f"  ✓ OCR completed")
+        print(f"  ✓ Textract OCR completed")
         print(f"  Preview: {text[:100].replace(chr(10), ' ')}...\n")
         
         # Free memory
         del image
         del processed_image
-    
-    # Free memory
-    del first_page_image
-    del last_page_image
     
     # Save raw OCR text
     raw_text_path = test_dir / 'raw_ocr_text.txt'
@@ -214,7 +190,7 @@ def test_pdf_processing(pdf_path, ocr_enhancement='medium'):
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("PDF OCR TEST MODE - First and Last Pages Only")
+    print("PDF OCR TEST MODE - First & Last 10 Pages")
     print("=" * 60)
     
     # Get input filename
