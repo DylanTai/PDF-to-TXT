@@ -38,7 +38,7 @@ Highlights:
 brew install poppler python
 python3 -m venv .venv
 source .venv/bin/activate
-pip install boto3 botocore pdf2image pillow opencv-python numpy
+pip install boto3 botocore pdf2image pillow opencv-python numpy python-dotenv
 ```
 
 Homebrew places Poppler on your PATH automatically.
@@ -51,7 +51,7 @@ Homebrew places Poppler on your PATH automatically.
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
-pip install boto3 botocore pdf2image pillow opencv-python numpy
+pip install boto3 botocore pdf2image pillow opencv-python numpy python-dotenv
 ```
 
 Update `configure_environment()` in `pdftotext.py` if Poppler lives elsewhere.
@@ -71,6 +71,13 @@ export AWS_REGION=us-east-1   # choose any Textract-supported region
 ```
 
 Textract regions include `us-east-1`, `us-west-2`, `eu-west-1`, and others. The script defaults to `us-east-1` when no region is provided.
+
+### Local .env Support
+
+- Copy the sample: `cp .env.example .env`
+- Edit `.env` with your AWS access key, secret key, optional session token, and preferred region.
+- Keep the `.env` file out of source control (already covered by `.gitignore` if you add it there).
+- Both scripts automatically load `.env` on startup. If `python-dotenv` is installed the file is parsed with it; otherwise a lightweight built-in loader handles simple `KEY=VALUE` pairs.
 
 ## Usage
 

@@ -14,6 +14,37 @@ import numpy as np
 import cv2
 from PIL import Image
 
+
+# ============================================================================
+# LOAD LOCAL ENVIRONMENT VARIABLES IF AVAILABLE
+# ============================================================================
+
+def _simple_env_loader(env_path):
+    """
+    Minimal .env parser used when python-dotenv isn't installed.
+    Supports KEY=VALUE pairs, ignoring blank lines and comments.
+    """
+    with env_path.open("r", encoding="utf-8") as env_file:
+        for raw_line in env_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            os.environ.setdefault(key, value)
+
+
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+if ENV_PATH.exists():
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        _simple_env_loader(ENV_PATH)
+    else:
+        load_dotenv(dotenv_path=ENV_PATH)
+
 # ============================================================================
 # PLATFORM-SPECIFIC CONFIGURATION
 # ============================================================================
