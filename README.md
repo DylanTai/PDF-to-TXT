@@ -4,18 +4,48 @@
 
 ## Overview
 
-This project turns inventory-style PDF documents into Excel-ready text files. Each page is preprocessed with OpenCV, passed through **Amazon Textract** for OCR, and parsed into pipe-delimited columns that drop cleanly into Excel.
+This project turns insurance-style “Line Item Detail” statements into Excel-ready text files. Each page is preprocessed with OpenCV, passed through **Amazon Textract** for OCR, and parsed into pipe-delimited columns that drop cleanly into Excel. The sample `mom.pdf` shipped with the repo is a 227-page contents inventory where every row contains the fields we extract:
+
+- an item number (`1.` … `5,295.`)
+- description text that may wrap onto multiple lines
+- a unit (`EA`, `PC`, `LB`, etc.) plus quantity
+- six financial columns (Estimate Amount → Estimated Remaining)
+- notation for depreciation, RC benefit policy limits, or “DUPLICATE” markers
+- page numbers the adjuster included in the footer
+
+By mirroring that format we can import the OCR results straight into Excel with **Data → Text to Columns** and keep the document context (including which page a line came from) for auditing.
 
 Highlights:
 
 - Converts multi-page PDFs in batches to conserve memory
 - Auto-selects DPI based on enhancement level (`low`, `medium`, `high`)
-- Applies watermark removal, denoising, and sharpening to boost text clarity
+- Applies light watermark suppression and noise cleanup to boost text clarity
+- Gently deskews, crops, and balances brightness/contrast without over-processing
 - Uses Textract’s synchronous `DetectDocumentText` API per page
 - Detects line items by searching for unit markers (EA, PC, LB, OZ, PK, etc.)
-- Produces `Number|Description|Qty|Estimate Amount|...` output ready for “Text to Columns”
+- Produces `Number|Description|Qty|Estimate Amount|...|Page Number` output ready for “Text to Columns”
+- Preserves Textract `DUPLICATE` flags and maps them to safe zero-dollar values
 
 > ⚠️ **AWS Costs & Quotas**: Textract billing is per page. Monitor AWS usage and limit IAM permissions to only what you need.
+
+### How It Works
+
+1. **Image preparation** – `pdf2image` (Poppler) renders each PDF page; OpenCV then deskews, trims borders, upsamples if needed, removes faint watermarks, and applies light denoising.
+2. **OCR** – The cleaned image is sent to Textract (`DetectDocumentText`). Textract can cope with the faint diagonal watermark, but pre-processing speeds it up and avoids oversized payloads.
+3. **Parsing** – `process_for_excel` walks Textract’s raw lines, reconstructs each inventory row, stitches wrapped descriptions (e.g., “Hammermill, Printer Paper …” plus “5 x 11-1 Ream (new)”), interprets ordered currency columns, and tracks the current PDF page.
+4. **Duplicate handling** – Textract sometimes labels repeated SKUs with a standalone `DUPLICATE` line. Those items are preserved with blank numeric values, `Actual Cash Value=DUPLICATE`, and both `Paid` and `Estimated Remaining` forced to `$0.00` so reviewers can spot them quickly.
+5. **Output** – The final text file uses pipes (`|`) and includes the source page number so you can jump back to the PDF during reconciliation.
+
+### Output Columns
+
+```
+Number|Description|Qty|Estimate Amount|Taxes|Replacement Cost Total|Age / Cond. / Life|Less Depreciation|Actual Cash Value|Paid|Estimated Remaining|Page Number
+```
+
+- **Description** may include continuation text from the PDF (e.g., “5 x 11-1 Ream (new)”).
+- **Qty** retains the unit; if Textract marks an item as `DUPLICATE`, quantity and dollar fields are blank.
+- **Actual Cash Value / Paid / Estimated Remaining** show `DUPLICATE`, `$0.00`, `$0.00` for repeated items so downstream formulas stay safe.
+- **Page Number** records where the row was read (useful when cross-checking with `mom.pdf`).
 
 ## Files Included
 
@@ -38,7 +68,7 @@ Highlights:
 brew install poppler python
 python3 -m venv .venv
 source .venv/bin/activate
-pip install boto3 botocore pdf2image pillow opencv-python numpy python-dotenv
+pip install -r requirements.txt
 ```
 
 Homebrew places Poppler on your PATH automatically.
@@ -51,7 +81,7 @@ Homebrew places Poppler on your PATH automatically.
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
-pip install boto3 botocore pdf2image pillow opencv-python numpy python-dotenv
+pip install -r requirements.txt
 ```
 
 Update `configure_environment()` in `pdftotext.py` if Poppler lives elsewhere.
@@ -79,6 +109,12 @@ Textract regions include `us-east-1`, `us-west-2`, `eu-west-1`, and others. The 
 - Keep the `.env` file out of source control (already covered by `.gitignore` if you add it there).
 - Both scripts automatically load `.env` on startup. If `python-dotenv` is installed the file is parsed with it; otherwise a lightweight built-in loader handles simple `KEY=VALUE` pairs.
 
+### Installing Dependencies with `requirements.txt`
+
+- Activate your virtual environment, then run `pip install -r requirements.txt`.
+- This installs `boto3`, `botocore`, `numpy`, `opencv-python`, `pdf2image`, `pillow`, and `python-dotenv`, which cover all imports used by the scripts.
+- Re-run the command whenever the file changes to keep your environment up to date.
+
 ## Usage
 
 ### Full Run (`pdftotext.py`)
@@ -98,10 +134,11 @@ python pdftotext.py    # or python3 on macOS/Linux
    - `high` – 400 DPI, aggressive preprocessing (best for noisy scans)
 6. Each page is uploaded to Textract; progress and timing print to the console.
 7. The output `<pdf_name>_output.txt` appears beside the original PDF.
+8. Every row includes the original PDF page number as the final column so you can jump back to the source document (helpful when reviewing `mom.pdf`).
 
 ### Test Mode (`pdftotext_test.py`)
 
-Quickly inspect OCR quality by processing only the first and last page.
+Quickly inspect OCR quality by processing up to the first 10 and last 10 pages (entire PDF if shorter).
 
 ```bash
 mkdir -p test_files

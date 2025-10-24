@@ -12,7 +12,12 @@ from pdf2image import convert_from_path
 
 import numpy as np
 import cv2
-from PIL import Image
+from PIL import Image, ImageOps
+
+try:
+    RESAMPLING_BICUBIC = Image.Resampling.BICUBIC
+except AttributeError:  # Pillow < 9.1
+    RESAMPLING_BICUBIC = Image.BICUBIC
 
 
 # ============================================================================
@@ -108,131 +113,187 @@ __all__ = [
 
 def remove_watermark(image):
     """
-    Remove watermark/draft text from image
+    Light watermark suppression that preserves text edges.
+    Falls back to the original image if no obvious watermark is detected.
     """
     img_array = np.array(image)
-    
-    # Convert to grayscale if needed
-    if len(img_array.shape) == 3:
+
+    if img_array.ndim == 3:
         gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
     else:
         gray = img_array
-    
-    # Apply binary threshold to separate text from background
-    # Use Otsu's method for automatic threshold
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
-    # Invert if needed (text should be black on white)
-    if np.mean(binary) < 127:
-        binary = cv2.bitwise_not(binary)
-    
-    # Use morphological operations to remove large faint text (watermark)
-    # while preserving small dark text (actual content)
-    
-    # Create a kernel for morphological operations
-    kernel = np.ones((3, 3), np.uint8)
-    
-    # Apply morphological closing to connect nearby text
-    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
-    
-    # Find contours
-    contours, _ = cv2.findContours(cv2.bitwise_not(closed), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Create mask to remove large, low-contrast elements (watermark)
-    mask = np.ones_like(gray) * 255
-    
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        x, y, w, h = cv2.boundingRect(contour)
-        
-        # Remove very large components (likely watermark)
-        # Watermarks are typically large and cover significant area
-        if area > 50000 or (w > 500 and h > 200):
-            cv2.drawContours(mask, [contour], -1, 0, -1)
-    
-    # Apply mask
-    result = cv2.bitwise_and(gray, gray, mask=mask)
-    
-    # Enhance contrast after watermark removal
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    result = clahe.apply(result)
-    
-    return Image.fromarray(result)
+
+    blurred = cv2.medianBlur(gray, 3)
+    background = cv2.morphologyEx(blurred, cv2.MORPH_OPEN, np.ones((25, 25), np.uint8))
+    residual = cv2.subtract(blurred, background)
+    enhanced = cv2.normalize(residual, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
+
+    blended = cv2.addWeighted(gray, 0.7, enhanced, 0.3, 0)
+    return Image.fromarray(blended)
+
+
+def _correct_orientation(image):
+    """
+    Deskew and ensure the page is mostly upright using min-area rectangle.
+    Only corrects small skews; avoids rotating landscape pages that are
+    already correctly oriented.
+    """
+    upright = ImageOps.exif_transpose(image)
+    img_array = np.array(upright)
+    if img_array.ndim == 3:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img_array
+
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    coords = np.column_stack(np.where(thresh < 255))
+
+    if coords.size == 0:
+        return upright
+
+    angle = cv2.minAreaRect(coords)[-1]
+    if angle < -45:
+        angle = -(90 + angle)
+    else:
+        angle = -angle
+
+    if abs(angle) < 0.5 or abs(angle) > 15:
+        return upright
+
+    return upright.rotate(angle, expand=True, fillcolor="white")
+
+
+def _crop_document_region(image):
+    """
+    Remove large uniform borders so OCR focuses on document content.
+    """
+    img_array = np.array(image)
+    if img_array.ndim == 3:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img_array
+
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    inverted = cv2.bitwise_not(thresh)
+    kernel = np.ones((5, 5), np.uint8)
+    dilated = cv2.dilate(inverted, kernel, iterations=1)
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        return image
+
+    largest = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(largest)
+    page_area = image.width * image.height
+    if w * h < page_area * 0.5:
+        return image
+
+    return image.crop((x, y, x + w, y + h))
+
+
+def _ensure_min_resolution(image, target_dpi):
+    """
+    Upscale very small renders to improve readability without shrinking images.
+    """
+    dpi = image.info.get('dpi')
+
+    if isinstance(dpi, tuple) and dpi[0] > 0:
+        scale_from_dpi = max(1.0, target_dpi / dpi[0])
+    elif isinstance(dpi, (int, float)) and dpi > 0:
+        scale_from_dpi = max(1.0, target_dpi / dpi)
+    else:
+        scale_from_dpi = 1.0
+
+    min_dimension = min(image.size)
+    scale_from_size = 1.0
+    if min_dimension < 1500:
+        scale_from_size = 1500 / float(min_dimension)
+
+    scale = max(scale_from_dpi, scale_from_size)
+
+    if scale <= 1.05:
+        return image
+
+    new_size = (int(image.width * scale), int(image.height * scale))
+    return image.resize(new_size, RESAMPLING_BICUBIC)
+
+
+def _adjust_brightness_contrast(image, enhancement_level):
+    """
+    Apply gentle brightness/contrast corrections when the page is too dark or light.
+    """
+    img_array = np.array(image)
+    if img_array.ndim == 3:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img_array
+
+    mean_intensity = float(gray.mean())
+    alpha = 1.0
+    beta = 0
+
+    if mean_intensity < 110:
+        alpha = 1.15 if enhancement_level != 'low' else 1.1
+        beta = 12
+    elif mean_intensity > 190:
+        alpha = 0.9
+        beta = -12
+
+    if alpha == 1.0 and beta == 0:
+        return image
+
+    adjusted = cv2.convertScaleAbs(img_array, alpha=alpha, beta=beta)
+    return Image.fromarray(adjusted)
+
+
+def _gentle_denoise(image, enhancement_level):
+    """
+    Light despeckle to remove sensor noise without blurring text strokes.
+    """
+    img_array = np.array(image)
+    if img_array.ndim == 2:
+        h_value = 5 if enhancement_level == 'high' else 3
+        cleaned = cv2.fastNlMeansDenoising(img_array, None, h=h_value, templateWindowSize=7, searchWindowSize=21)
+    else:
+        h_value = 7 if enhancement_level == 'high' else 5
+        cleaned = cv2.fastNlMeansDenoisingColored(img_array, None, h_value, h_value, 7, 21)
+    return Image.fromarray(cleaned)
+
+
+def _to_grayscale(image):
+    """
+    Convert to grayscale while preserving subtle intensity variations.
+    """
+    if image.mode == 'L':
+        return image
+    return ImageOps.grayscale(image)
 
 
 def preprocess_image_for_ocr(image, enhancement_level='medium'):
     """
-    Preprocess image to improve OCR accuracy
+    Preprocess image to improve OCR accuracy using gentle, document-safe steps.
     
     Args:
         image: PIL Image object
-        enhancement_level: 'low', 'medium', or 'high' - level of preprocessing
+        enhancement_level: 'low', 'medium', or 'high'
     
     Returns:
         PIL Image object (preprocessed)
     """
-    
-    # First, try to remove watermark
-    image = remove_watermark(image)
-    
-    # Convert PIL Image to numpy array for OpenCV processing
-    img_array = np.array(image)
-    
-    # Already grayscale from watermark removal
-    gray = img_array
-    
-    if enhancement_level == 'low':
-        # Light preprocessing - just basic contrast enhancement
-        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(gray)
-        
-    elif enhancement_level == 'medium':
-        # Medium preprocessing - contrast + denoising + sharpening
-        
-        # Denoise
-        denoised = cv2.fastNlMeansDenoising(gray, h=10)
-        
-        # Apply CLAHE for better contrast
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(denoised)
-        
-        # Sharpen
-        kernel = np.array([[-1,-1,-1],
-                          [-1, 9,-1],
-                          [-1,-1,-1]])
-        enhanced = cv2.filter2D(enhanced, -1, kernel)
-        
-    else:  # 'high'
-        # Aggressive preprocessing - all techniques
-        
-        # Denoise
-        denoised = cv2.fastNlMeansDenoising(gray, h=10)
-        
-        # Apply CLAHE
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(denoised)
-        
-        # Adaptive thresholding for better text separation
-        enhanced = cv2.adaptiveThreshold(
-            enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY, 11, 2
-        )
-        
-        # Morphological operations to clean up
-        kernel = np.ones((1,1), np.uint8)
-        enhanced = cv2.morphologyEx(enhanced, cv2.MORPH_CLOSE, kernel)
-        
-        # Sharpen
-        kernel = np.array([[-1,-1,-1],
-                          [-1, 9,-1],
-                          [-1,-1,-1]])
-        enhanced = cv2.filter2D(enhanced, -1, kernel)
-    
-    # Convert back to PIL Image
-    processed_image = Image.fromarray(enhanced)
-    
-    return processed_image
+    enhancement_level = enhancement_level or 'medium'
+
+    adjusted = remove_watermark(image)
+    adjusted = _correct_orientation(adjusted)
+    adjusted = _crop_document_region(adjusted)
+    adjusted = _ensure_min_resolution(adjusted, get_dpi_for_enhancement_level(enhancement_level))
+
+    adjusted = _adjust_brightness_contrast(adjusted, enhancement_level)
+    adjusted = _gentle_denoise(adjusted, enhancement_level)
+
+    grayscale = _to_grayscale(adjusted)
+    return grayscale
 
 
 def get_dpi_for_enhancement_level(enhancement_level):
@@ -516,84 +577,293 @@ def pdf_to_excel_ready_text(
     return output_txt_path
 
 
+ITEM_START_PATTERN = re.compile(r'^(\d[\d,]*)[.)]\s+(.*)$')
+UNIT_PATTERN = re.compile(r'^(\d+\.?\d*)\s+(EA|ea|PC|pc|LB|lb|OZ|oz|PK|pk)\b')
+CURRENCY_PATTERN = re.compile(r'^-?\$[\d,]+(?:\.\d{2})?$')
+STOP_PREFIXES = (
+    'subtotal',
+    'coverage',
+    'tai inventory',
+    'line item detail',
+    'rc benefits',
+    'description',
+    'qty',
+    'estimate amount',
+    'taxes',
+    'replacement cost',
+    'age / cond',
+    'less depreciation',
+    'actual cash value',
+    'paid',
+    'estimated remaining',
+    'amount of rc benefits',
+    'page',
+)
+
+FOOTNOTE_PATTERNS = (
+    re.compile(r'^\*'),
+    re.compile(r'^the amount', re.IGNORECASE),
+    re.compile(r'^indicates', re.IGNORECASE),
+    re.compile(r'^[A-Z0-9]{6,}$'),
+    re.compile(r'^item found', re.IGNORECASE),
+    re.compile(r'^duplicate$', re.IGNORECASE),
+)
+
+
+def _normalize_description(text):
+    """Collapse excessive whitespace in descriptions."""
+    return ' '.join(text.split())
+
+
+def _collect_description_lines(lines, start_index):
+    """
+    Gather free-form description lines until a structured value or the next
+    item header appears. Returns the concatenated description fragment and
+    the new index.
+    """
+    parts = []
+    index = start_index
+
+    while index < len(lines):
+        candidate = lines[index].strip()
+        if not candidate:
+            index += 1
+            continue
+
+        lower = candidate.lower()
+        next_non_empty = index + 1
+        while next_non_empty < len(lines) and not lines[next_non_empty].strip():
+            next_non_empty += 1
+
+        if next_non_empty < len(lines) and UNIT_PATTERN.match(lines[next_non_empty].strip()):
+            break
+
+        if ITEM_START_PATTERN.match(candidate):
+            break
+        if UNIT_PATTERN.match(candidate):
+            break
+        if CURRENCY_PATTERN.match(candidate):
+            break
+        if any(lower.startswith(prefix) for prefix in STOP_PREFIXES):
+            break
+        if any(pattern.match(candidate) for pattern in FOOTNOTE_PATTERNS):
+            break
+
+        parts.append(candidate)
+        index += 1
+
+    description = _normalize_description(' '.join(parts))
+    return description, index
+
+
+def _consume_currency(lines, index):
+    """
+    Consume a currency-like value from lines[index], returning the value and
+    the next index. If the current line does not look like currency, returns
+    an empty string without advancing.
+    """
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+
+    if index < len(lines):
+        candidate = lines[index].strip()
+        if CURRENCY_PATTERN.match(candidate):
+            return candidate, index + 1
+
+    return '', index
+
+
+def _consume_age_line(lines, index):
+    """
+    Capture age/condition/life lines such as '2y/Avg./10y'.
+    """
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+
+    if index < len(lines):
+        candidate = lines[index].strip()
+        if 'y/' in candidate.lower():
+            return candidate, index + 1
+
+    return '', index
+
+
 def process_for_excel(text):
     """
-    Process OCR text to make it Excel-friendly.
-    NEW APPROACH: Find lines with "EA" (or other units), then extract the item info.
+    Convert Textract OCR output into pipe-delimited rows ready for Excel.
+    The parser walks the OCR text sequentially, respecting the PDF layout:
+    item header -> quantity -> monetary columns -> optional notes.
     """
-    
     lines = text.split('\n')
-    
-    # Define the header
-    header = "Number|Description|Qty|Estimate Amount|Taxes|Replacement Cost Total|Age / Cond. / Life|Less Depreciation|Actual Cash Value|Paid|Estimated Remaining"
-    
+
+    header = (
+        "Number|Description|Qty|Estimate Amount|Taxes|Replacement Cost Total|"
+        "Age / Cond. / Life|Less Depreciation|Actual Cash Value|Paid|Estimated Remaining|Page Number"
+    )
     processed_lines = [header]
     items_found = []
-    
-    # Buffer to collect lines that might be part of an item
-    line_buffer = []
-    
-    for line in lines:
-        line = line.strip()
-        
-        # Skip empty lines
+
+    index = 0
+    total_lines = len(lines)
+    last_item_number = None
+    current_page = None
+
+    while index < total_lines:
+        line = lines[index].strip()
+
         if not line:
+            index += 1
             continue
-        
-        # Add to buffer
-        line_buffer.append(line)
-        
-        # Check if this line contains a unit (EA, PC, LB, etc.)
-        # This indicates we have the data row
-        if re.search(r'\b(EA|ea|PC|pc|LB|lb|OZ|oz|PK|pk)\b', line):
-            # We found a data line! Now extract the item from the buffer
-            item = extract_item_from_buffer(line_buffer)
-            
-            if item:
-                processed_lines.append(format_item_line(item))
-                if item.get('number'):
-                    try:
-                        item_num = int(item['number'])
-                        # Only track reasonable item numbers (less than 100,000)
-                        if item_num < 100000:
-                            items_found.append(item_num)
-                    except:
-                        pass
-            
-            # Clear the buffer
-            line_buffer = []
-        
-        # Keep buffer manageable (max 10 lines)
-        if len(line_buffer) > 10:
-            line_buffer.pop(0)
-    
-    # Print statistics
+
+        if set(line) <= {'='} and line:
+            index += 1
+            continue
+
+        page_block_match = re.match(r'^PAGE\s+(\d+)', line, re.IGNORECASE)
+        if page_block_match:
+            current_page = int(page_block_match.group(1))
+            index += 1
+            continue
+
+        page_colon_match = re.match(r'^Page[:\s]+(\d+)', line, re.IGNORECASE)
+        if page_colon_match:
+            current_page = int(page_colon_match.group(1))
+            index += 1
+            continue
+
+        match = ITEM_START_PATTERN.match(line)
+        if not match:
+            implicit_item = None
+            if (
+                last_item_number is not None
+                and line
+                and not CURRENCY_PATTERN.match(line)
+                and not UNIT_PATTERN.match(line)
+                and not any(line.lower().startswith(prefix) for prefix in STOP_PREFIXES)
+                and not any(pattern.match(line) for pattern in FOOTNOTE_PATTERNS)
+            ):
+                lookahead = index + 1
+                while lookahead < total_lines and not lines[lookahead].strip():
+                    lookahead += 1
+
+                if lookahead < total_lines and UNIT_PATTERN.match(lines[lookahead].strip()):
+                    currency_checks = 0
+                    probe = lookahead + 1
+                    while probe < total_lines and currency_checks < 3:
+                        probe_line = lines[probe].strip()
+                        if probe_line:
+                            if CURRENCY_PATTERN.match(probe_line):
+                                currency_checks += 1
+                            else:
+                                break
+                        probe += 1
+
+                    if currency_checks >= 3:
+                        implicit_item = {
+                            'number': str(last_item_number + 1),
+                            'description': _normalize_description(line),
+                        }
+
+            if not implicit_item:
+                index += 1
+                continue
+
+            item_number = implicit_item['number']
+            description = implicit_item['description']
+            index += 1
+        else:
+            item_number = match.group(1).replace(',', '')
+            description = _normalize_description(match.group(2))
+            index += 1
+
+        duplicate_marker = False
+        if index < total_lines and lines[index].strip().lower() == 'duplicate':
+            duplicate_marker = True
+            index += 1
+
+        extra_desc, index = _collect_description_lines(lines, index)
+        if extra_desc:
+            description = _normalize_description(f"{description} {extra_desc}")
+
+        qty = ''
+        if index < total_lines:
+            qty_candidate = lines[index].strip()
+            qty_match = UNIT_PATTERN.match(qty_candidate)
+            if qty_match:
+                qty = f"{qty_match.group(1)} {qty_match.group(2).upper()}"
+                index += 1
+
+        estimate_amount, index = _consume_currency(lines, index)
+        taxes, index = _consume_currency(lines, index)
+        replacement_total, index = _consume_currency(lines, index)
+        age_life, index = _consume_age_line(lines, index)
+        less_depreciation, index = _consume_currency(lines, index)
+        actual_cash_value, index = _consume_currency(lines, index)
+        paid, index = _consume_currency(lines, index)
+        estimated_remaining, index = _consume_currency(lines, index)
+
+        trailing_desc, index = _collect_description_lines(lines, index)
+        if trailing_desc:
+            description = _normalize_description(f"{description} {trailing_desc}")
+
+        if duplicate_marker:
+            qty = ''
+            estimate_amount = ''
+            taxes = ''
+            replacement_total = ''
+            age_life = ''
+            less_depreciation = ''
+            actual_cash_value = 'DUPLICATE'
+            paid = '$0.00'
+            estimated_remaining = '$0.00'
+
+        formatted_line = "|".join(
+            [
+                item_number,
+                description,
+                qty,
+                estimate_amount,
+                taxes,
+                replacement_total,
+                age_life,
+                less_depreciation,
+                actual_cash_value,
+                paid,
+                estimated_remaining,
+                str(current_page) if current_page is not None else "",
+            ]
+        )
+        processed_lines.append(formatted_line)
+
+        try:
+            item_value = int(item_number)
+        except ValueError:
+            item_value = None
+        else:
+            if item_value < 100000:
+                items_found.append(item_value)
+        if item_value is not None:
+            last_item_number = item_value
+
     if items_found:
         items_found.sort()
         print(f"\n  Items processed: {len(items_found)}")
-        print(f"  First item: {min(items_found)}")
-        print(f"  Last item: {max(items_found)}")
-        
-        # Only check for gaps if the range is reasonable (less than 50,000 items)
-        item_range = max(items_found) - min(items_found) + 1
-        
+        print(f"  First item: {items_found[0]}")
+        print(f"  Last item: {items_found[-1]}")
+
+        item_range = items_found[-1] - items_found[0] + 1
         if item_range < 50000:
-            # Check for gaps
-            missing = []
-            for i in range(min(items_found), max(items_found) + 1):
-                if i not in items_found:
-                    missing.append(i)
-            
+            missing = [num for num in range(items_found[0], items_found[-1] + 1) if num not in items_found]
             if missing:
                 print(f"  ⚠ Warning: Missing {len(missing)} items")
                 if len(missing) <= 20:
                     print(f"  Missing items: {missing}")
                 else:
-                    print(f"  Missing items include: {missing[:10]}... and {len(missing)-10} more")
+                    print(f"  Missing items include: {missing[:10]}... and {len(missing) - 10} more")
         else:
             print(f"  ⚠ Item range too large ({item_range:,} items) - skipping gap analysis")
-            print(f"  Note: Some item numbers may be OCR errors (very large numbers)")
-    
+            print("  Note: Some item numbers may be OCR errors (very large numbers)")
+
     return '\n'.join(processed_lines)
 
 
