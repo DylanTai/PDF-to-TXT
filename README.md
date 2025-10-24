@@ -1,375 +1,133 @@
-# PDF to Excel OCR Converter (Enhanced)
+# PDF to Excel OCR Converter (AWS Textract)
 
-**Last Updated: January 2025**
+**Last Updated: October 2025**
 
-## Description
+## Overview
 
-This program converts PDF files into Excel-ready text files using OCR (Optical Character Recognition). It's specifically designed to extract numbered inventory items from PDF documents and format them into pipe-delimited columns that can be easily imported into Excel.
+This project turns inventory-style PDF documents into Excel-ready text files. Each page is preprocessed with OpenCV, passed through **Amazon Textract** for OCR, and parsed into pipe-delimited columns that drop cleanly into Excel.
 
-**Features: Enhanced OCR with automatic DPI selection and image preprocessing for improved accuracy!**
+Highlights:
 
-## What It Does
+- Converts multi-page PDFs in batches to conserve memory
+- Auto-selects DPI based on enhancement level (`low`, `medium`, `high`)
+- Applies watermark removal, denoising, and sharpening to boost text clarity
+- Uses Textract’s synchronous `DetectDocumentText` API per page
+- Detects line items by searching for unit markers (EA, PC, LB, OZ, PK, etc.)
+- Produces `Number|Description|Qty|Estimate Amount|...` output ready for “Text to Columns”
 
-1. **Reads PDF files** - Converts each page of your PDF into images
-2. **Auto-adjusts quality** - Automatically selects optimal DPI based on enhancement level
-3. **Enhances images** - Preprocesses images with denoising, contrast enhancement, and sharpening
-4. **Performs OCR** - Extracts text from the enhanced images using Tesseract OCR with optimized settings
-5. **Intelligent parsing** - Identifies numbered items by looking for unit markers (EA, PC, LB, OZ, etc.)
-6. **Formats for Excel** - Organizes data into columns separated by pipe (`|`) delimiters
-7. **Handles large files** - Processes PDFs in batches to avoid memory issues
-8. **Cross-platform** - Automatically detects and configures for Windows or macOS
-
-## OCR Enhancement Levels
-
-The program offers three levels of enhancement with automatic DPI optimization:
-
-| Level      | DPI | Image Processing                                    | Speed    | Best For                     |
-| ---------- | --- | --------------------------------------------------- | -------- | ---------------------------- |
-| **Low**    | 200 | Basic contrast enhancement                          | Fastest  | High-quality, clear PDFs     |
-| **Medium** | 300 | Contrast + denoising + sharpening                   | Balanced | Most PDFs (recommended)      |
-| **High**   | 400 | Aggressive preprocessing with adaptive thresholding | Slowest  | Poor-quality or scanned PDFs |
-
-**DPI is automatically selected** - you just choose the enhancement level!
-
-## Output Format
-
-The program creates a text file with the following columns:
-
-- Number
-- Description
-- Qty
-- Estimate Amount
-- Taxes
-- Replacement Cost Total
-- Age / Cond. / Life
-- Less Depreciation
-- Actual Cash Value
-- Paid
-- Estimated Remaining
-
-Each line represents one inventory item, with fields separated by `|` characters.
+> ⚠️ **AWS Costs & Quotas**: Textract billing is per page. Monitor AWS usage and limit IAM permissions to only what you need.
 
 ## Files Included
 
-- `pdftotext.py` - Main script that works on both Windows and macOS
-- `pdftotext_test.py` - Test script for debugging (processes first 10 pages only)
+- `pdftotext.py` – Batch processor that writes `<pdf_name>_output.txt`
+- `pdftotext_test.py` – Convenience script to process only the first and last page and save intermediate artefacts under `test_files/`
 
 ## Requirements
 
-### Windows
+### Common
 
-- Python 3
-- Tesseract OCR
-- Poppler for Windows
-- Python packages: `pytesseract`, `pdf2image`, `pillow`, `opencv-python`, `numpy`
+- Python 3.9+
+- AWS account with Textract permissions
+- AWS credentials configured locally (see **AWS Setup**)
+- Poppler utilities (required by `pdf2image`)
+- Python packages: `boto3`, `botocore`, `pdf2image`, `pillow`, `opencv-python`, `numpy`
 
-### Mac
-
-- Python 3
-- Tesseract OCR (via Homebrew)
-- Poppler (via Homebrew)
-- Python packages: `pytesseract`, `pdf2image`, `pillow`, `opencv-python`, `numpy`
-
-## Installation
-
-### Windows
+### macOS
 
 ```bash
-# Install Python packages
-pip install pytesseract pdf2image pillow opencv-python numpy
-
-# Download and install Tesseract OCR from:
-# https://github.com/UB-Mannheim/tesseract/wiki
-
-# Download and extract Poppler from:
-# https://github.com/oschwartz10612/poppler-windows/releases
-# Extract to C:\poppler (or update the path in pdftotext.py)
+brew install poppler python
+python3 -m venv .venv
+source .venv/bin/activate
+pip install boto3 botocore pdf2image pillow opencv-python numpy
 ```
 
-### Mac
-
-```bash
-# Install Homebrew (if not already installed)
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# Install required software
-brew install tesseract poppler python3
-
-# Install Python packages
-pip3 install pytesseract pdf2image pillow opencv-python numpy
-```
-
-## Configuration
-
-The script automatically detects your operating system and configures paths accordingly.
+Homebrew places Poppler on your PATH automatically.
 
 ### Windows
 
-If Tesseract or Poppler are installed in different locations, edit the `configure_paths()` function in `pdftotext.py`:
+1. Install Poppler for Windows and note the `poppler\Library\bin` path (default assumed in the script is `C:\poppler\Library\bin`).
+2. Install Python 3 and create a virtual environment.
 
-```python
-if system == 'Windows':
-    tesseract_cmd = r'C:\Your\Custom\Path\tesseract.exe'
-    poppler_path = r'C:\Your\Custom\Path\poppler\Library\bin'
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+pip install boto3 botocore pdf2image pillow opencv-python numpy
 ```
 
-### Mac
+Update `configure_environment()` in `pdftotext.py` if Poppler lives elsewhere.
 
-The script automatically detects Tesseract on macOS. If it fails, edit the `configure_paths()` function:
+## AWS Setup
 
-```python
-elif system == 'Darwin':
-    tesseract_cmd = '/your/custom/path/tesseract'
-    poppler_path = None
+1. Create an IAM user/role with Textract permissions (e.g. `AmazonTextractFullAccess`, or a custom least-privilege policy).
+2. Generate access keys if you are using an IAM user.
+3. Configure credentials locally:
+
+```bash
+aws configure
+# or set environment variables
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_REGION=us-east-1   # choose any Textract-supported region
 ```
+
+Textract regions include `us-east-1`, `us-west-2`, `eu-west-1`, and others. The script defaults to `us-east-1` when no region is provided.
 
 ## Usage
 
-### Full Processing (All Pages)
+### Full Run (`pdftotext.py`)
 
-1. Place your PDF file in the same directory as the script
-2. Run the script:
-   - **Windows:** `python pdftotext.py`
-   - **Mac:** `python3 pdftotext.py`
-3. Enter the filename when prompted (e.g., `inventory.pdf`)
-4. **Choose an OCR enhancement level** (low/medium/high)
-   - DPI is automatically selected based on your choice
-5. Wait for processing to complete
-6. Find the output file: `yourfilename_output.txt`
-
-**The script will automatically detect your operating system and use the appropriate configuration!**
-
-### Test Mode (First 10 Pages Only)
-
-For testing and debugging, use `pdftotext_test.py` to process only the first 10 pages:
-
-1. **Create a test_files directory** in the same location as the scripts:
+1. Place the target PDF in this directory.
+2. Activate your virtual environment (if applicable).
+3. Run:
 
 ```bash
-   mkdir test_files
+python pdftotext.py    # or python3 on macOS/Linux
 ```
 
-2. Run the test script:
+4. Enter the PDF file name when prompted (e.g. `inventory.pdf`).
+5. Pick an enhancement level:
+   - `low` – 200 DPI, light preprocessing (fastest)
+   - `medium` – 300 DPI, denoising + sharpening (default)
+   - `high` – 400 DPI, aggressive preprocessing (best for noisy scans)
+6. Each page is uploaded to Textract; progress and timing print to the console.
+7. The output `<pdf_name>_output.txt` appears beside the original PDF.
 
-   - **Windows:** `python pdftotext_test.py`
-   - **Mac:** `python3 pdftotext_test.py`
+### Test Mode (`pdftotext_test.py`)
 
-3. Enter the filename and choose enhancement level
+Quickly inspect OCR quality by processing only the first and last page.
 
-4. The script will create:
-   - `test_files/preprocessed_images/` - Original and preprocessed images for each page
-   - `test_files/raw_ocr_text.txt` - Raw OCR output from all 10 pages
-   - `test_files/formatted_output.txt` - Formatted, pipe-delimited output
-
-**Use test mode to:**
-
-- Verify OCR quality before processing entire PDF
-- Compare preprocessing results visually
-- Debug issues with specific pages
-- Test different enhancement levels quickly
-
-### Example Session
-
+```bash
+mkdir -p test_files
+python pdftotext_test.py
 ```
-Enter the PDF filename (e.g., name_of_pdf.pdf): inventory.pdf
 
-OCR Enhancement Levels:
-  'low'    - Basic enhancement, DPI: 200 (fastest)
-  'medium' - Balanced enhancement, DPI: 300 (recommended)
-  'high'   - Aggressive enhancement, DPI: 400 (best quality, slowest)
+Outputs:
 
-Select enhancement level (low/medium/high) [default: medium]: medium
+- `test_files/preprocessed_images/page_XXXX_original.png`
+- `test_files/preprocessed_images/page_XXXX_preprocessed.png`
+- `test_files/raw_ocr_text.txt`
+- `test_files/formatted_output.txt`
 
-Starting conversion of: inventory.pdf
-Operating System: Darwin
-OCR Enhancement Level: medium
-DPI Setting: 300 (auto-selected based on enhancement level)
-```
+You can inject a custom Textract client (for example, with retries or a Stubber) by calling `test_pdf_processing(..., textract_client=my_client)`.
 
 ## Importing into Excel
 
-1. Open the output `.txt` file in a text editor
-2. Copy all content (Ctrl+A, Ctrl+C / Cmd+A, Cmd+C)
-3. Open Excel and paste into cell A1
-4. Select all pasted data
-5. Go to **Data** → **Text to Columns**
-6. Choose **Delimited** → Click **Next**
-7. Check **Other** and type `|` in the box → Click **Next**
-8. Click **Finish**
+1. Open `<pdf_name>_output.txt`.
+2. Copy all content and paste into Excel (cell `A1`).
+3. Use **Data → Text to Columns**.
+4. Choose **Delimited**, tick **Other**, and set the delimiter to `|`.
+5. Finish to split values into columns.
 
-Your data will now be properly split into columns!
+## Troubleshooting & Tips
 
-## Performance Tips
+- **AWS credentials not found**: Ensure `aws sts get-caller-identity` succeeds in the same environment. The script prints the Textract region in use.
+- **Textract 5 MB limit**: The script compresses large images, but if a page still exceeds the limit, drop the enhancement level or reduce DPI.
+- **Poppler missing**: Install Poppler (Homebrew on macOS) or adjust the Windows path in `configure_environment()`.
+- **Throughput**: Textract synchronous calls are rate limited. For very large PDFs consider batching runs or using the asynchronous Textract APIs.
+- **Costs**: Every page scanned incurs charges. Test with smaller documents first and clean up IAM users/keys when finished.
 
-- **Large PDFs (100+ pages)**: The script processes in batches of 20 pages to avoid memory issues
-- **Choose the right level**:
-  - Start with **medium** for most PDFs
-  - Use **low** if processing is too slow and your PDF is already clear
-  - Use **high** if you're missing items or text quality is poor
-- **Test first**: Use `pdftotext_test.py` to test on 10 pages before processing the entire PDF
-- **Memory errors**: Reduce batch size from 20 to 10 pages by editing the script
-- **Processing time estimates** (per page):
+## Customisation
 
-| Level  | DPI | Time per Page |
-| ------ | --- | ------------- |
-| Low    | 200 | 1-3 seconds   |
-| Medium | 300 | 3-6 seconds   |
-| High   | 400 | 6-12 seconds  |
-
-To manually adjust batch size, modify the function call at the bottom of `pdftotext.py`:
-
-```python
-result = pdf_to_excel_ready_text(pdf_file, output_file, batch_size=10, ocr_enhancement=enhancement)
-```
-
-## OCR Enhancement Details
-
-### Low Enhancement (DPI: 200)
-
-- **Best for**: Clean, high-quality PDFs with clear text
-- **Speed**: Fastest (~1-3 seconds per page)
-- **Techniques**: CLAHE contrast enhancement
-- **Image processing**: Minimal
-- **Use when**: Text is already very readable in the PDF, speed is priority
-
-### Medium Enhancement (DPI: 300) - Recommended
-
-- **Best for**: Most PDFs with standard quality
-- **Speed**: Balanced (~3-6 seconds per page)
-- **Techniques**: Denoising + CLAHE + Sharpening
-- **Image processing**: Moderate
-- **Use when**: General purpose, unsure about PDF quality, or starting point
-
-### High Enhancement (DPI: 400)
-
-- **Best for**: Poor-quality scans, faded text, noisy images, or when items are missing
-- **Speed**: Slowest but most accurate (~6-12 seconds per page)
-- **Techniques**: Adaptive thresholding + morphological operations + denoising + CLAHE + sharpening
-- **Image processing**: Aggressive
-- **Use when**:
-  - OCR is missing many items with lower settings
-  - PDF contains scanned documents
-  - Text is faint or has artifacts
-  - Small font sizes
-
-## Troubleshooting
-
-### Windows
-
-- **"Tesseract not found"**: Update the path in the `configure_paths()` function to match your Tesseract installation
-- **"Poppler not found"**: Update the `poppler_path` in the `configure_paths()` function to match where you extracted Poppler
-- **"cv2 module not found"**: Run `pip install opencv-python numpy`
-
-### Mac
-
-- **"Tesseract not found"**: Run `brew install tesseract` or update the path in the `configure_paths()` function
-- **"Poppler not found"**: Run `brew install poppler`
-- **"cv2 module not found"**: Run `pip3 install opencv-python numpy`
-
-### Both Platforms
-
-- **Missing items in output**:
-  1. First, try **high** enhancement level
-  2. Use `pdftotext_test.py` to inspect preprocessed images
-  3. Check the console output for statistics on missing items
-  4. Verify items have unit markers (EA, PC, LB, etc.)
-- **Memory errors**:
-  - Reduce batch size to 10 or 5 in the script
-  - Close other applications to free up RAM
-  - Process smaller sections of the PDF at a time
-- **Incorrect column splitting**: Verify that items contain unit markers (EA, PC, LB, etc.)
-- **Too slow**:
-  - Use **low** enhancement level
-  - Process fewer pages at once
-- **Still poor accuracy on high**:
-  - Check original PDF quality
-  - Use `pdftotext_test.py` to examine preprocessed images
-  - Consider re-scanning the document at higher resolution
-  - Some PDFs may have formatting that's incompatible with the parser
-- **Test script errors**: Make sure both `pdftotext.py` and `pdftotext_test.py` are in the same directory
-
-## Limitations
-
-- Only processes items that contain unit measurements (EA, PC, LB, OZ, PK)
-- OCR accuracy depends on PDF quality
-- Very large numbers (1000+) may have OCR errors with commas
-- Requires consistent formatting in the original PDF
-- Processing time increases with higher enhancement levels and DPI
-- Memory usage increases with higher DPI settings
-
-## Support
-
-If items are missing from the output, try these steps in order:
-
-1. **Use test mode** - Run `pdftotext_test.py` to examine first 10 pages
-2. **Check preprocessed images** - Look at images in `test_files/preprocessed_images/` to verify quality
-3. **Switch to 'high' enhancement level** - This automatically uses 400 DPI and aggressive preprocessing
-4. **Check console statistics** - Look for which item numbers are missing
-5. **Verify unit markers** - Ensure items have EA, PC, LB, OZ, or PK in them
-6. **Review PDF quality** - Open the original PDF and check if text is readable
-7. **Check formatting** - Ensure item numbers are followed by periods (e.g., "175.")
-
-### Decision Tree for Enhancement Level
-
-```
-Is your PDF clear and high-quality?
-├─ Yes → Start with LOW (fastest)
-│  └─ Missing items? → Try MEDIUM
-│     └─ Still missing? → Try HIGH
-│
-└─ No/Unsure → Start with MEDIUM (recommended)
-   └─ Missing items?
-      ├─ Run pdftotext_test.py to inspect images
-      └─ Try HIGH
-         └─ Still issues? → Check PDF quality/formatting
-```
-
-## Example Output
-
-### Raw Output File (`inventory_output.txt`)
-
-```
-Number|Description|Qty|Estimate Amount|Taxes|Replacement Cost Total|Age / Cond. / Life|Less Depreciation|Actual Cash Value|Paid|Estimated Remaining
-1|Samsung 55-inch LED Smart TV|1.00 EA|$450.00|$36.00|$486.00|3 y/ Good /7 y|-$150.00|$336.00|$0.00|$150.00
-2|Office Desk Chair - Ergonomic Black Leather|2.00 EA|$125.00|$10.00|$135.00|1 y/ Excellent /10 y|-$15.00|$120.00|$0.00|$15.00
-127|Wireless Bluetooth Speaker Portable|5.00 EA|$35.99|$2.88|$38.87|0.5 y/ New /5 y|-$4.50|$34.37|$0.00|$4.50
-```
-
-### After Importing to Excel
-
-| Number | Description                                 | Qty     | Estimate Amount | Taxes  | Replacement Cost Total | Age / Cond. / Life   | Less Depreciation | Actual Cash Value | Paid  | Estimated Remaining |
-| ------ | ------------------------------------------- | ------- | --------------- | ------ | ---------------------- | -------------------- | ----------------- | ----------------- | ----- | ------------------- |
-| 1      | Samsung 55-inch LED Smart TV                | 1.00 EA | $450.00         | $36.00 | $486.00                | 3 y/ Good /7 y       | -$150.00          | $336.00           | $0.00 | $150.00             |
-| 2      | Office Desk Chair - Ergonomic Black Leather | 2.00 EA | $125.00         | $10.00 | $135.00                | 1 y/ Excellent /10 y | -$15.00           | $120.00           | $0.00 | $15.00              |
-| 127    | Wireless Bluetooth Speaker Portable         | 5.00 EA | $35.99          | $2.88  | $38.87                 | 0.5 y/ New /5 y      | -$4.50            | $34.37            | $0.00 | $4.50               |
-
-## Quick Start Guide
-
-**For most users:**
-
-1. Install requirements (see Installation section)
-2. Run `python3 pdftotext.py` (Mac) or `python pdftotext.py` (Windows)
-3. Enter your PDF filename
-4. Choose **medium** enhancement level
-5. Wait for processing
-6. Import the output .txt file into Excel using Text to Columns with `|` delimiter
-
-**For testing/debugging:**
-
-1. Create `test_files` directory: `mkdir test_files`
-2. Run `python3 pdftotext_test.py` (Mac) or `python pdftotext_test.py` (Windows)
-3. Enter your PDF filename
-4. Choose enhancement level
-5. Examine outputs in `test_files/` directory
-
-**If items are missing:**
-
-- Re-run with **high** enhancement level
-
-**If processing is too slow:**
-
-- Re-run with **low** enhancement level
-
----
-
-**Note**: This tool is designed for inventory PDFs with specific formatting. Results may vary with different document types. The automatic DPI selection ensures optimal balance between speed and accuracy for each enhancement level. Use the test script to debug issues before processing large PDFs.
+- Pass a pre-configured client into `pdf_to_excel_ready_text(..., textract_client=...)` to add retries, metrics, or take advantage of AWS profiles.
+- Adjust `process_for_excel` if your downstream data model differs.
+- For huge PDFs, consider uploading to S3 and swapping in Textract’s asynchronous `StartDocumentTextDetection` workflow.

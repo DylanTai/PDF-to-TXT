@@ -1,21 +1,20 @@
 import sys
 from pathlib import Path
 import time
-from PIL import Image
 import shutil
 
 # Import functions from the main pdftotext.py file
 try:
     from pdftotext import (
-        configure_paths,
         preprocess_image_for_ocr,
         get_dpi_for_enhancement_level,
         process_for_excel,
         extract_item_from_buffer,
         parse_data_fields,
         format_item_line,
-        TESSERACT_CMD,
-        POPPLER_PATH
+        get_textract_client,
+        textract_detect_text,
+        POPPLER_PATH,
     )
 except ImportError as e:
     print("Error: Could not import from pdftotext.py")
@@ -23,25 +22,22 @@ except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-import pytesseract
 from pdf2image import convert_from_path, pdfinfo_from_path
-
-# Use the configured paths from pdftotext.py
-if TESSERACT_CMD:
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 
 # ============================================================================
 # TEST PROCESSING FUNCTION
 # ============================================================================
 
-def test_pdf_processing(pdf_path, ocr_enhancement='medium'):
+def test_pdf_processing(pdf_path, ocr_enhancement='medium', textract_client=None):
     """
-    Test PDF processing on first and last pages only
+    Test PDF processing on first and last pages only.
+    Uses Amazon Textract for OCR so AWS credentials must be configured.
     
     Args:
         pdf_path: Path to the PDF file
         ocr_enhancement: 'low', 'medium', or 'high'
+        textract_client: Optional Textract client (pass stub for unit tests)
     
     Returns:
         Path to the test_files directory
@@ -67,6 +63,7 @@ def test_pdf_processing(pdf_path, ocr_enhancement='medium'):
     print(f"  ✓ Created fresh preprocessed_images directory\n")
     
     dpi = get_dpi_for_enhancement_level(ocr_enhancement)
+    textract_client = textract_client or get_textract_client()
     
     # Get total number of pages
     try:
@@ -87,6 +84,7 @@ def test_pdf_processing(pdf_path, ocr_enhancement='medium'):
     print(f"Processing pages: 1 and {total_pages}")
     print(f"Enhancement: {ocr_enhancement}")
     print(f"DPI: {dpi}")
+    print(f"AWS Textract Region: {getattr(textract_client.meta, 'region_name', 'unknown')}")
     print(f"Output directory: {test_dir}")
     print(f"{'='*60}\n")
     
@@ -161,15 +159,14 @@ def test_pdf_processing(pdf_path, ocr_enhancement='medium'):
         processed_image.save(processed_path)
         print(f"  ✓ Saved preprocessed: {processed_path}")
         
-        # Perform OCR
-        custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(processed_image, lang='eng', config=custom_config)
+        # Perform OCR with Textract
+        text = textract_detect_text(processed_image, textract_client=textract_client)
         raw_text_all.append(f"\n{'='*60}\n")
         raw_text_all.append(f"PAGE {page_num}\n")
         raw_text_all.append(f"{'='*60}\n")
         raw_text_all.append(text)
         
-        print(f"  ✓ OCR completed")
+        print(f"  ✓ Textract OCR completed")
         print(f"  Preview: {text[:100].replace(chr(10), ' ')}...\n")
         
         # Free memory

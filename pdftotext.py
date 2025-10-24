@@ -1,96 +1,63 @@
-import sys
+import io
+import os
 import platform
-from pathlib import Path
-import pytesseract
-from pdf2image import convert_from_path
 import re
+import sys
 import time
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from pathlib import Path
+
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+from pdf2image import convert_from_path
+
 import numpy as np
 import cv2
+from PIL import Image
 
 # ============================================================================
 # PLATFORM-SPECIFIC CONFIGURATION
 # ============================================================================
 
-def configure_paths():
+def configure_environment():
     """
-    Configure Tesseract and Poppler paths based on operating system
-    
+    Configure platform specific settings.
+
     Returns:
-        tuple: (tesseract_cmd, poppler_path)
+        str|None: Poppler path if it needs to be explicitly provided.
     """
-    
+
     system = platform.system()
-    
+
     if system == 'Windows':
-        # Windows Configuration
-        tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
         poppler_path = r'C:\poppler\Library\bin'
-        
+
         print("\nWindows Configuration:")
-        print(f"  Tesseract: {tesseract_cmd}")
         print(f"  Poppler: {poppler_path}")
-        print("\nIf these paths are incorrect, edit the configure_paths() function.")
-        
-        return tesseract_cmd, poppler_path
-        
-    elif system == 'Darwin':  # macOS
-        # macOS Configuration - try to auto-detect Tesseract
-        import subprocess
-        import os
-        
-        tesseract_cmd = None
-        try:
-            # Try to find Tesseract using 'which'
-            result = subprocess.run(['which', 'tesseract'], 
-                                  capture_output=True, 
-                                  text=True, 
-                                  check=True)
-            tesseract_cmd = result.stdout.strip()
-        except:
-            # If 'which' fails, try common installation paths
-            common_paths = [
-                '/opt/homebrew/bin/tesseract',  # Apple Silicon Macs
-                '/usr/local/bin/tesseract',      # Intel Macs
-            ]
-            
-            for path in common_paths:
-                if os.path.exists(path):
-                    tesseract_cmd = path
-                    break
-        
-        # Poppler is usually in PATH on Mac, so we don't need to specify it
+        print("\nUpdate configure_environment() if Poppler is installed elsewhere.")
+
+        return poppler_path
+
+    if system == 'Darwin':  # macOS
         poppler_path = None
-        
+
         print("\nmacOS Configuration:")
-        if tesseract_cmd:
-            print(f"  Tesseract: {tesseract_cmd}")
-        else:
-            print("  Tesseract: Using system PATH")
-            print("  ⚠ Warning: Tesseract not found in common locations")
-            print("  Make sure it's installed: brew install tesseract")
-        
-        print(f"  Poppler: Using system PATH")
-        print("\nIf Tesseract path is incorrect, edit the configure_paths() function.")
-        
-        return tesseract_cmd, poppler_path
-        
-    else:
-        print(f"Unsupported operating system: {system}")
-        print("This script supports Windows and macOS only.")
-        sys.exit(1)
+        print("  Poppler: Using system PATH")
+        print("\nInstall via Homebrew if missing: brew install poppler")
+
+        return poppler_path
+
+    print(f"Unsupported operating system: {system}")
+    print("This script supports Windows and macOS only.")
+    sys.exit(1)
 
 
 # Configure paths based on OS
-TESSERACT_CMD, POPPLER_PATH = configure_paths()
-if TESSERACT_CMD:
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+POPPLER_PATH = configure_environment()
 
 
 # Export these for use by test script
 __all__ = [
-    'configure_paths',
+    'configure_environment',
     'remove_watermark',
     'preprocess_image_for_ocr',
     'get_dpi_for_enhancement_level',
@@ -98,8 +65,9 @@ __all__ = [
     'extract_item_from_buffer',
     'parse_data_fields',
     'format_item_line',
-    'TESSERACT_CMD',
-    'POPPLER_PATH'
+    'get_textract_client',
+    'textract_detect_text',
+    'POPPLER_PATH',
 ]
 
 
@@ -256,18 +224,123 @@ def get_dpi_for_enhancement_level(enhancement_level):
 
 
 # ============================================================================
+# AWS TEXTRACT OCR HELPERS
+# ============================================================================
+
+MAX_TEXTRACT_IMAGE_BYTES = 4_500_000  # Safety margin under the 5 MB Textract limit
+
+
+def get_textract_client(region_name=None):
+    """
+    Create (or reuse) a Textract client using environment settings.
+    
+    Args:
+        region_name: Optional AWS region override.
+    
+    Returns:
+        botocore.client.Textract
+    """
+    session_kwargs = {}
+
+    if region_name:
+        session_kwargs['region_name'] = region_name
+    else:
+        env_region = os.getenv('AWS_REGION') or os.getenv('AWS_DEFAULT_REGION')
+        if env_region:
+            session_kwargs['region_name'] = env_region
+
+    profile_name = os.getenv('AWS_PROFILE')
+    if profile_name:
+        session_kwargs['profile_name'] = profile_name
+
+    if 'region_name' not in session_kwargs:
+        session_kwargs['region_name'] = 'us-east-1'
+
+    session = boto3.Session(**session_kwargs)
+    return session.client('textract')
+
+
+def _encode_image_for_textract(image):
+    """
+    Encode a PIL image into a byte payload acceptable by Textract.
+    
+    Textract enforces a maximum size of 5 MB for synchronous calls, so we try
+    PNG first, then JPEG as a fallback with mild compression.
+    """
+    working_image = image
+    if working_image.mode not in ('L', 'RGB'):
+        working_image = working_image.convert('L')
+
+    buffer = io.BytesIO()
+    working_image.save(buffer, format='PNG', optimize=True)
+    payload = buffer.getvalue()
+
+    if len(payload) <= MAX_TEXTRACT_IMAGE_BYTES:
+        return payload
+
+    # Fallback to compressed JPEG in grayscale to reduce size
+    jpeg_image = working_image.convert('L')
+    buffer = io.BytesIO()
+    jpeg_image.save(buffer, format='JPEG', quality=85, optimize=True)
+    payload = buffer.getvalue()
+
+    if len(payload) > MAX_TEXTRACT_IMAGE_BYTES:
+        raise ValueError(
+            "Preprocessed page exceeds Textract's 5 MB limit after compression. "
+            "Try lowering the OCR enhancement level or reducing DPI."
+        )
+
+    return payload
+
+
+def textract_detect_text(image, textract_client=None):
+    """
+    Run Textract OCR on an image and return the detected text.
+    
+    Args:
+        image: PIL Image to process
+        textract_client: Optional, pre-initialised Textract client
+    
+    Returns:
+        str: Concatenated line text detected by Textract.
+    """
+    client = textract_client or get_textract_client()
+    document_bytes = _encode_image_for_textract(image)
+
+    try:
+        response = client.detect_document_text(Document={'Bytes': document_bytes})
+    except (BotoCoreError, ClientError) as exc:
+        raise RuntimeError(f"AWS Textract OCR failed: {exc}") from exc
+
+    lines = [
+        block['Text']
+        for block in response.get('Blocks', [])
+        if block.get('BlockType') == 'LINE' and 'Text' in block
+    ]
+
+    return '\n'.join(lines)
+
+
+# ============================================================================
 # MAIN PDF TO EXCEL CONVERSION FUNCTIONS
 # ============================================================================
 
-def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, batch_size=20, ocr_enhancement='medium'):
+def pdf_to_excel_ready_text(
+    pdf_path,
+    output_txt_path=None,
+    batch_size=20,
+    ocr_enhancement='medium',
+    textract_client=None,
+):
     """
-    Convert PDF to text using Tesseract OCR and format for Excel paste.
+    Convert PDF to text using Amazon Textract OCR and format for Excel paste.
     
     Args:
         pdf_path: Path to the PDF file
         output_txt_path: Path for output text file (optional)
         batch_size: Number of pages to process at once (to avoid memory issues)
         ocr_enhancement: 'low', 'medium', or 'high' - level of image preprocessing
+        textract_client: Optional preconfigured Textract client (useful for tests)
     
     Returns:
         Path to the output text file
@@ -281,10 +354,15 @@ def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, batch_size=20, ocr_e
         pdf_file = Path(pdf_path)
         output_txt_path = pdf_file.with_suffix('.txt')
     
+    textract_client = textract_client or get_textract_client()
+    client_meta = getattr(textract_client, 'meta', None)
+    region_name = getattr(client_meta, 'region_name', 'unknown')
+
     print(f"Starting conversion of: {pdf_path}")
     print(f"Operating System: {platform.system()}")
     print(f"OCR Enhancement Level: {ocr_enhancement}")
     print(f"DPI Setting: {dpi} (auto-selected based on enhancement level)")
+    print(f"AWS Textract Region: {region_name}")
     print(f"Batch size: {batch_size} pages at a time")
     print("=" * 60)
     
@@ -348,11 +426,9 @@ def pdf_to_excel_ready_text(pdf_path, output_txt_path=None, batch_size=20, ocr_e
                 # Preprocess image for better OCR
                 processed_image = preprocess_image_for_ocr(image, ocr_enhancement)
                 
-                print("OCR...", end=" ", flush=True)
+                print("Textract OCR...", end=" ", flush=True)
                 
-                # Perform OCR with custom configuration for better accuracy
-                custom_config = r'--oem 3 --psm 6'  # OEM 3 = Default, PSM 6 = Assume uniform block of text
-                text = pytesseract.image_to_string(processed_image, lang='eng', config=custom_config)
+                text = textract_detect_text(processed_image, textract_client=textract_client)
                 
                 page_time = time.time() - page_start
                 print(f"✓ ({page_time:.2f}s)")
