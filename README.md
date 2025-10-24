@@ -4,7 +4,7 @@
 
 ## Overview
 
-This project turns insurance-style “Line Item Detail” statements into Excel-ready text files. Each page is preprocessed with OpenCV, passed through **Amazon Textract** for OCR, and parsed into pipe-delimited columns that drop cleanly into Excel. The sample `mom.pdf` shipped with the repo is a 227-page contents inventory where every row contains the fields we extract:
+This project turns insurance-style “Line Item Detail” statements into Excel-ready text files. Each page is preprocessed with OpenCV, passed through **Amazon Textract** for OCR, and parsed into pipe-delimited columns that drop cleanly into Excel. The sample that I originall had was a 227-page contents inventory where every row contains the fields we extract:
 
 - an item number (`1.` … `5,295.`)
 - description text that may wrap onto multiple lines
