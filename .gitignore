@@ -8,3 +8,4 @@ outputs/*
 # Ignore these folders completely
 __pycache__/
 venv/
+.claude/
