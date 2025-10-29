@@ -41,7 +41,7 @@ def _simple_env_loader(env_path):
             os.environ.setdefault(key, value)
 
 
-ENV_PATH = Path(__file__).resolve().parent / ".env"
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 if ENV_PATH.exists():
     try:
         from dotenv import load_dotenv
@@ -89,22 +89,6 @@ def configure_environment():
 
 # Configure paths based on OS
 POPPLER_PATH = configure_environment()
-
-
-# Export these for use by test script
-__all__ = [
-    'configure_environment',
-    'remove_watermark',
-    'preprocess_image_for_ocr',
-    'get_dpi_for_enhancement_level',
-    'process_for_excel',
-    'extract_item_from_buffer',
-    'parse_data_fields',
-    'format_item_line',
-    'get_textract_client',
-    'textract_detect_text',
-    'POPPLER_PATH',
-]
 
 
 # ============================================================================
@@ -274,11 +258,11 @@ def _to_grayscale(image):
 def preprocess_image_for_ocr(image, enhancement_level='medium'):
     """
     Preprocess image to improve OCR accuracy using gentle, document-safe steps.
-    
+
     Args:
         image: PIL Image object
         enhancement_level: 'low', 'medium', or 'high'
-    
+
     Returns:
         PIL Image object (preprocessed)
     """
@@ -299,10 +283,10 @@ def preprocess_image_for_ocr(image, enhancement_level='medium'):
 def get_dpi_for_enhancement_level(enhancement_level):
     """
     Get the appropriate DPI based on enhancement level
-    
+
     Args:
         enhancement_level: 'low', 'medium', or 'high'
-    
+
     Returns:
         int: DPI value
     """
@@ -311,7 +295,7 @@ def get_dpi_for_enhancement_level(enhancement_level):
         'medium': 300,   # Balanced quality and speed
         'high': 400      # Best quality for difficult PDFs
     }
-    
+
     return dpi_settings.get(enhancement_level, 300)
 
 
@@ -325,10 +309,10 @@ MAX_TEXTRACT_IMAGE_BYTES = 4_500_000  # Safety margin under the 5 MB Textract li
 def get_textract_client(region_name=None):
     """
     Create (or reuse) a Textract client using environment settings.
-    
+
     Args:
         region_name: Optional AWS region override.
-    
+
     Returns:
         botocore.client.Textract
     """
@@ -355,7 +339,7 @@ def get_textract_client(region_name=None):
 def _encode_image_for_textract(image):
     """
     Encode a PIL image into a byte payload acceptable by Textract.
-    
+
     Textract enforces a maximum size of 5 MB for synchronous calls, so we try
     PNG first, then JPEG as a fallback with mild compression.
     """
@@ -388,11 +372,11 @@ def _encode_image_for_textract(image):
 def textract_detect_text(image, textract_client=None):
     """
     Run Textract OCR on an image and return the detected text.
-    
+
     Args:
         image: PIL Image to process
         textract_client: Optional, pre-initialised Textract client
-    
+
     Returns:
         str: Concatenated line text detected by Textract.
     """
@@ -414,38 +398,309 @@ def textract_detect_text(image, textract_client=None):
 
 
 # ============================================================================
-# MAIN PDF TO EXCEL CONVERSION FUNCTIONS
+# TRADE SUMMARY PARSING FUNCTIONS
 # ============================================================================
 
-def pdf_to_excel_ready_text(
+# Pattern to detect section headers (3 uppercase letters)
+SECTION_CODE_PATTERN = re.compile(r'^([A-Z]{3})$')
+
+# Pattern to detect quantity with unit
+QUANTITY_PATTERN = re.compile(r'^(\d+\.?\d*)\s+(EA|ea|PC|pc|LB|lb|OZ|oz|PK|pk)\b')
+
+# Pattern to detect currency
+CURRENCY_PATTERN = re.compile(r'^-?\$[\d,]+(?:\.\d{2})?$')
+
+# Pattern to detect total lines
+TOTAL_PATTERN = re.compile(r'^TOTAL\s+(.+?)$', re.IGNORECASE)
+
+# Skip these header lines
+SKIP_LINES = (
+    'trade summary',
+    'includes all applicable',
+    'description',
+    'line item',
+    'qty',
+    'repl. cost',
+    'total',
+    'acv',
+    'non-rec.',
+    'deprec.',
+    'max addl.',
+    'amt avail.',
+    'note: slight variances',
+    'page:',
+)
+
+
+def _normalize_text(text):
+    """Collapse excessive whitespace."""
+    return ' '.join(text.split())
+
+
+def _is_skip_line(line):
+    """Check if this line should be skipped (headers, footers, etc.)"""
+    lower = line.lower()
+    return any(skip in lower for skip in SKIP_LINES)
+
+
+def _consume_currency(lines, index):
+    """
+    Consume a currency value from lines[index].
+    Returns the value and the next index.
+    """
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+
+    if index < len(lines):
+        candidate = lines[index].strip()
+        if CURRENCY_PATTERN.match(candidate):
+            return candidate, index + 1
+
+    return '', index
+
+
+def process_trade_summary(text, delimiter='|'):
+    """
+    Parse trade summary format from Textract OCR output.
+
+    Expected format:
+    - Section header: 3-letter code (e.g., "AMA")
+    - Section description: Full name (e.g., "AUTOMOTIVE & MOTORCYCLE ACC.")
+    - Items: Description + Qty + 4 currency columns
+    - Totals: "TOTAL <section name>" + 4 currency columns
+
+    Args:
+        text: Raw OCR text from Textract
+        delimiter: Column separator (default: '|')
+
+    Returns:
+        Formatted text ready for Excel import
+    """
+    lines = text.split('\n')
+
+    # Build header
+    header = delimiter.join([
+        "Description",
+        "Line Item Qty",
+        "Repl. Cost Total",
+        "ACV",
+        "Non-Rec. Deprec.",
+        "Max Addl. Amt Avail.",
+        "Type"
+    ])
+
+    processed_lines = [header]
+    totals = []  # Store totals for final summary
+    seen_sections = set()  # Track sections to avoid duplicates
+
+    current_section_code = None
+    current_section_name = None
+    index = 0
+    total_lines = len(lines)
+
+    while index < total_lines:
+        line = lines[index].strip()
+
+        # Skip empty lines
+        if not line:
+            index += 1
+            continue
+
+        # Check for total line FIRST (before skip check, since "TOTAL" is in SKIP_LINES)
+        total_match = TOTAL_PATTERN.match(line)
+        if total_match:
+            section_for_total = total_match.group(1)
+            index += 1
+
+            # Consume 4 currency values
+            repl_cost, index = _consume_currency(lines, index)
+            acv, index = _consume_currency(lines, index)
+            non_rec_deprec, index = _consume_currency(lines, index)
+            max_addl, index = _consume_currency(lines, index)
+
+            # Store total for summary
+            if current_section_code and repl_cost:
+                totals.append({
+                    'code': current_section_code,
+                    'name': section_for_total,
+                    'repl_cost': repl_cost,
+                    'acv': acv,
+                    'non_rec_deprec': non_rec_deprec,
+                    'max_addl': max_addl
+                })
+
+            continue
+
+        # Skip header/footer lines
+        if _is_skip_line(line):
+            index += 1
+            continue
+
+        # Check for section code (3 uppercase letters)
+        section_match = SECTION_CODE_PATTERN.match(line)
+        if section_match:
+            section_code = section_match.group(1)
+
+            # Skip duplicate sections
+            if section_code in seen_sections:
+                index += 1
+                # Skip the description line too
+                if index < total_lines:
+                    index += 1
+                continue
+
+            # Mark this section as seen
+            seen_sections.add(section_code)
+            current_section_code = section_code
+            index += 1
+
+            # Next line should be the section description
+            if index < total_lines:
+                next_line = lines[index].strip()
+                if next_line and not _is_skip_line(next_line):
+                    current_section_name = next_line
+
+                    # Add blank line before section (unless it's the first section)
+                    if len(processed_lines) > 1:  # More than just header
+                        processed_lines.append('')
+
+                    # Add section header to output
+                    section_header = f"{current_section_code} --- {current_section_name}"
+                    processed_lines.append(section_header)
+                    index += 1
+            continue
+
+        # Check if this might be an item description
+        # Items typically start with text, not currency
+        if not CURRENCY_PATTERN.match(line) and not QUANTITY_PATTERN.match(line):
+            # Collect description lines
+            description_parts = [line]
+            index += 1
+
+            # Keep collecting until we hit a quantity pattern
+            while index < total_lines:
+                next_line = lines[index].strip()
+
+                if not next_line:
+                    index += 1
+                    continue
+
+                # Stop if we hit a quantity line
+                if QUANTITY_PATTERN.match(next_line):
+                    break
+
+                # Stop if we hit a new section or total
+                if SECTION_CODE_PATTERN.match(next_line) or TOTAL_PATTERN.match(next_line):
+                    break
+
+                # Stop if we hit a skip line
+                if _is_skip_line(next_line):
+                    index += 1
+                    continue
+
+                # Add to description if it's not currency
+                if not CURRENCY_PATTERN.match(next_line):
+                    description_parts.append(next_line)
+                    index += 1
+                else:
+                    break
+
+            description = _normalize_text(' '.join(description_parts))
+
+            # Now try to consume quantity
+            qty = ''
+            if index < total_lines:
+                qty_candidate = lines[index].strip()
+                qty_match = QUANTITY_PATTERN.match(qty_candidate)
+                if qty_match:
+                    qty = f"{qty_match.group(1)} {qty_match.group(2).upper()}"
+                    index += 1
+
+            # Consume 4 currency values
+            repl_cost, index = _consume_currency(lines, index)
+            acv, index = _consume_currency(lines, index)
+            non_rec_deprec, index = _consume_currency(lines, index)
+            max_addl, index = _consume_currency(lines, index)
+
+            # Only add if we have at least description and one currency value
+            if description and (repl_cost or acv or non_rec_deprec or max_addl):
+                formatted_line = delimiter.join([
+                    description,
+                    qty,
+                    repl_cost,
+                    acv,
+                    non_rec_deprec,
+                    max_addl,
+                    current_section_code or ''
+                ])
+                processed_lines.append(formatted_line)
+            else:
+                # No valid data, skip this line
+                pass
+        else:
+            # Line starts with currency or quantity, skip it
+            index += 1
+
+    # Add totals summary at the end
+    if totals:
+        processed_lines.append('')  # Blank line
+        processed_lines.append('TOTALS')
+
+        for total in totals:
+            # Remove "TOTAL " prefix from the name - just show the section name and code
+            total_line = delimiter.join([
+                f"{total['name']} ({total['code']})",
+                '',  # No quantity for totals
+                total['repl_cost'],
+                total['acv'],
+                total['non_rec_deprec'],
+                total['max_addl'],
+                ''  # No type for totals
+            ])
+            processed_lines.append(total_line)
+
+    return '\n'.join(processed_lines)
+
+
+# ============================================================================
+# MAIN PDF TO EXCEL CONVERSION FUNCTION
+# ============================================================================
+
+def pdf_to_trade_summary(
     pdf_path,
     output_txt_path=None,
     batch_size=20,
     ocr_enhancement='medium',
     textract_client=None,
+    delimiter='|'
 ):
     """
-    Convert PDF to text using Amazon Textract OCR and format for Excel paste.
-    
+    Convert PDF to trade summary format using Amazon Textract OCR.
+
     Args:
         pdf_path: Path to the PDF file
         output_txt_path: Path for output text file (optional)
-        batch_size: Number of pages to process at once (to avoid memory issues)
-        ocr_enhancement: 'low', 'medium', or 'high' - level of image preprocessing
-        textract_client: Optional preconfigured Textract client (useful for tests)
-    
+        batch_size: Number of pages to process at once
+        ocr_enhancement: 'low', 'medium', or 'high'
+        textract_client: Optional preconfigured Textract client
+        delimiter: Column separator (default: '|')
+
     Returns:
         Path to the output text file
     """
-    
+
     # Get DPI based on enhancement level
     dpi = get_dpi_for_enhancement_level(ocr_enhancement)
-    
+
     # Set output path if not provided
     if output_txt_path is None:
         pdf_file = Path(pdf_path)
-        output_txt_path = pdf_file.with_suffix('.txt')
-    
+        # Get the project root directory (parent of src/)
+        project_root = Path(__file__).resolve().parent.parent
+        output_dir = project_root / 'outputs'
+        output_dir.mkdir(exist_ok=True)
+        output_txt_path = output_dir / f"{pdf_file.stem}_all_section.txt"
+
     textract_client = textract_client or get_textract_client()
     client_meta = getattr(textract_client, 'meta', None)
     region_name = getattr(client_meta, 'region_name', 'unknown')
@@ -453,14 +708,15 @@ def pdf_to_excel_ready_text(
     print(f"Starting conversion of: {pdf_path}")
     print(f"Operating System: {platform.system()}")
     print(f"OCR Enhancement Level: {ocr_enhancement}")
-    print(f"DPI Setting: {dpi} (auto-selected based on enhancement level)")
+    print(f"DPI Setting: {dpi}")
     print(f"AWS Textract Region: {region_name}")
     print(f"Batch size: {batch_size} pages at a time")
+    print(f"Delimiter: '{delimiter}'")
     print("=" * 60)
-    
+
     all_text = []
-    
-    # First, get the total number of pages
+
+    # Get total number of pages
     from pdf2image import pdfinfo_from_path
     try:
         if POPPLER_PATH:
@@ -472,23 +728,23 @@ def pdf_to_excel_ready_text(
     except:
         print("\nCouldn't determine page count, will process in batches...")
         total_pages = None
-    
-    print("\nProcessing PDF in batches to avoid memory issues...")
+
+    print("\nProcessing PDF in batches...")
     print("=" * 60)
-    
+
     # Process in batches
     page_num = 1
     batch_num = 1
-    
+
     while True:
         try:
             print(f"\nBatch {batch_num}: Processing pages {page_num} to {page_num + batch_size - 1}...")
             batch_start = time.time()
-            
+
             # Convert a batch of pages
             if POPPLER_PATH:
                 images = convert_from_path(
-                    pdf_path, 
+                    pdf_path,
                     dpi=dpi,
                     first_page=page_num,
                     last_page=page_num + batch_size - 1,
@@ -496,52 +752,52 @@ def pdf_to_excel_ready_text(
                 )
             else:
                 images = convert_from_path(
-                    pdf_path, 
+                    pdf_path,
                     dpi=dpi,
                     first_page=page_num,
                     last_page=page_num + batch_size - 1
                 )
-            
+
             if not images:
                 print("No more pages to process.")
                 break
-            
+
             batch_time = time.time() - batch_start
             print(f"  ✓ Batch converted to images ({batch_time:.2f} seconds)")
             print(f"  Processing {len(images)} pages with enhanced OCR...")
-            
+
             # Process each page in the batch
             for i, image in enumerate(images, page_num):
                 page_start = time.time()
                 print(f"    [Page {i}] Preprocessing image...", end=" ", flush=True)
-                
+
                 # Preprocess image for better OCR
                 processed_image = preprocess_image_for_ocr(image, ocr_enhancement)
-                
+
                 print("Textract OCR...", end=" ", flush=True)
-                
+
                 text = textract_detect_text(processed_image, textract_client=textract_client)
-                
+
                 page_time = time.time() - page_start
                 print(f"✓ ({page_time:.2f}s)")
-                
+
                 all_text.append(text)
-                
+
                 # Free memory
                 del image
                 del processed_image
-            
+
             # Free memory
             del images
-            
+
             # Move to next batch
             page_num += batch_size
             batch_num += 1
-            
+
             # Check if we've processed all pages
             if total_pages and page_num > total_pages:
                 break
-                
+
         except Exception as e:
             # If we get an error (like no more pages), we're done
             if "Unable to get page" in str(e) or "Invalid page" in str(e):
@@ -550,431 +806,31 @@ def pdf_to_excel_ready_text(
             else:
                 print(f"\n✗ Error processing batch: {e}")
                 break
-    
+
     print("\n" + "=" * 60)
     print("Step 2: Processing and formatting text for Excel...")
-    
+
     # Combine all text
-    combined_text = ''.join(all_text)
-    
+    combined_text = '\n'.join(all_text)
+
     # Process text to make it Excel-friendly
-    processed_text = process_for_excel(combined_text)
-    
+    processed_text = process_trade_summary(combined_text, delimiter=delimiter)
+
     # Save to TXT file
     print(f"Step 3: Saving to file: {output_txt_path}")
     with open(output_txt_path, 'w', encoding='utf-8') as f:
         f.write(processed_text)
     print(f"✓ TXT file created!")
-    
+
     print("=" * 60)
     print(f"\n✓✓✓ SUCCESS! ✓✓✓")
     print(f"\nFile saved: {output_txt_path}")
     print(f"Total characters extracted: {len(processed_text):,}")
     print(f"\nYou can open this file and copy-paste into Excel.")
-    print(f"Then use Data > Text to Columns > Delimited > Other: |")
+    print(f"Then use Data > Text to Columns > Delimited > Other: {delimiter}")
     print("=" * 60)
-    
+
     return output_txt_path
-
-
-ITEM_START_PATTERN = re.compile(r'^(\d[\d,]*)[.)]\s+(.*)$')
-UNIT_PATTERN = re.compile(r'^(\d+\.?\d*)\s+(EA|ea|PC|pc|LB|lb|OZ|oz|PK|pk)\b')
-CURRENCY_PATTERN = re.compile(r'^-?\$[\d,]+(?:\.\d{2})?$')
-STOP_PREFIXES = (
-    'subtotal',
-    'coverage',
-    'tai inventory',
-    'line item detail',
-    'rc benefits',
-    'description',
-    'qty',
-    'estimate amount',
-    'taxes',
-    'replacement cost',
-    'age / cond',
-    'less depreciation',
-    'actual cash value',
-    'paid',
-    'estimated remaining',
-    'amount of rc benefits',
-    'page',
-)
-
-FOOTNOTE_PATTERNS = (
-    re.compile(r'^\*'),
-    re.compile(r'^the amount', re.IGNORECASE),
-    re.compile(r'^indicates', re.IGNORECASE),
-    re.compile(r'^[A-Z0-9]{6,}$'),
-    re.compile(r'^item found', re.IGNORECASE),
-    re.compile(r'^duplicate$', re.IGNORECASE),
-)
-
-
-def _normalize_description(text):
-    """Collapse excessive whitespace in descriptions."""
-    return ' '.join(text.split())
-
-
-def _collect_description_lines(lines, start_index):
-    """
-    Gather free-form description lines until a structured value or the next
-    item header appears. Returns the concatenated description fragment and
-    the new index.
-    """
-    parts = []
-    index = start_index
-
-    while index < len(lines):
-        candidate = lines[index].strip()
-        if not candidate:
-            index += 1
-            continue
-
-        lower = candidate.lower()
-        next_non_empty = index + 1
-        while next_non_empty < len(lines) and not lines[next_non_empty].strip():
-            next_non_empty += 1
-
-        if next_non_empty < len(lines) and UNIT_PATTERN.match(lines[next_non_empty].strip()):
-            break
-
-        if ITEM_START_PATTERN.match(candidate):
-            break
-        if UNIT_PATTERN.match(candidate):
-            break
-        if CURRENCY_PATTERN.match(candidate):
-            break
-        if any(lower.startswith(prefix) for prefix in STOP_PREFIXES):
-            break
-        if any(pattern.match(candidate) for pattern in FOOTNOTE_PATTERNS):
-            break
-
-        parts.append(candidate)
-        index += 1
-
-    description = _normalize_description(' '.join(parts))
-    return description, index
-
-
-def _consume_currency(lines, index):
-    """
-    Consume a currency-like value from lines[index], returning the value and
-    the next index. If the current line does not look like currency, returns
-    an empty string without advancing.
-    """
-    while index < len(lines) and not lines[index].strip():
-        index += 1
-
-    if index < len(lines):
-        candidate = lines[index].strip()
-        if CURRENCY_PATTERN.match(candidate):
-            return candidate, index + 1
-
-    return '', index
-
-
-def _consume_age_line(lines, index):
-    """
-    Capture age/condition/life lines such as '2y/Avg./10y'.
-    """
-    while index < len(lines) and not lines[index].strip():
-        index += 1
-
-    if index < len(lines):
-        candidate = lines[index].strip()
-        if 'y/' in candidate.lower():
-            return candidate, index + 1
-
-    return '', index
-
-
-def process_for_excel(text):
-    """
-    Convert Textract OCR output into pipe-delimited rows ready for Excel.
-    The parser walks the OCR text sequentially, respecting the PDF layout:
-    item header -> quantity -> monetary columns -> optional notes.
-    """
-    lines = text.split('\n')
-
-    header = (
-        "Number|Description|Qty|Estimate Amount|Taxes|Replacement Cost Total|"
-        "Age / Cond. / Life|Less Depreciation|Actual Cash Value|Paid|Estimated Remaining|Page Number"
-    )
-    processed_lines = [header]
-    items_found = []
-
-    index = 0
-    total_lines = len(lines)
-    last_item_number = None
-    current_page = None
-
-    while index < total_lines:
-        line = lines[index].strip()
-
-        if not line:
-            index += 1
-            continue
-
-        if set(line) <= {'='} and line:
-            index += 1
-            continue
-
-        page_block_match = re.match(r'^PAGE\s+(\d+)', line, re.IGNORECASE)
-        if page_block_match:
-            current_page = int(page_block_match.group(1))
-            index += 1
-            continue
-
-        page_colon_match = re.match(r'^Page[:\s]+(\d+)', line, re.IGNORECASE)
-        if page_colon_match:
-            current_page = int(page_colon_match.group(1))
-            index += 1
-            continue
-
-        match = ITEM_START_PATTERN.match(line)
-        if not match:
-            implicit_item = None
-            if (
-                last_item_number is not None
-                and line
-                and not CURRENCY_PATTERN.match(line)
-                and not UNIT_PATTERN.match(line)
-                and not any(line.lower().startswith(prefix) for prefix in STOP_PREFIXES)
-                and not any(pattern.match(line) for pattern in FOOTNOTE_PATTERNS)
-            ):
-                lookahead = index + 1
-                while lookahead < total_lines and not lines[lookahead].strip():
-                    lookahead += 1
-
-                if lookahead < total_lines and UNIT_PATTERN.match(lines[lookahead].strip()):
-                    currency_checks = 0
-                    probe = lookahead + 1
-                    while probe < total_lines and currency_checks < 3:
-                        probe_line = lines[probe].strip()
-                        if probe_line:
-                            if CURRENCY_PATTERN.match(probe_line):
-                                currency_checks += 1
-                            else:
-                                break
-                        probe += 1
-
-                    if currency_checks >= 3:
-                        implicit_item = {
-                            'number': str(last_item_number + 1),
-                            'description': _normalize_description(line),
-                        }
-
-            if not implicit_item:
-                index += 1
-                continue
-
-            item_number = implicit_item['number']
-            description = implicit_item['description']
-            index += 1
-        else:
-            item_number = match.group(1).replace(',', '')
-            description = _normalize_description(match.group(2))
-            index += 1
-
-        duplicate_marker = False
-        if index < total_lines and lines[index].strip().lower() == 'duplicate':
-            duplicate_marker = True
-            index += 1
-
-        extra_desc, index = _collect_description_lines(lines, index)
-        if extra_desc:
-            description = _normalize_description(f"{description} {extra_desc}")
-
-        qty = ''
-        if index < total_lines:
-            qty_candidate = lines[index].strip()
-            qty_match = UNIT_PATTERN.match(qty_candidate)
-            if qty_match:
-                qty = f"{qty_match.group(1)} {qty_match.group(2).upper()}"
-                index += 1
-
-        estimate_amount, index = _consume_currency(lines, index)
-        taxes, index = _consume_currency(lines, index)
-        replacement_total, index = _consume_currency(lines, index)
-        age_life, index = _consume_age_line(lines, index)
-        less_depreciation, index = _consume_currency(lines, index)
-        actual_cash_value, index = _consume_currency(lines, index)
-        paid, index = _consume_currency(lines, index)
-        estimated_remaining, index = _consume_currency(lines, index)
-
-        trailing_desc, index = _collect_description_lines(lines, index)
-        if trailing_desc:
-            description = _normalize_description(f"{description} {trailing_desc}")
-
-        if duplicate_marker:
-            qty = ''
-            estimate_amount = ''
-            taxes = ''
-            replacement_total = ''
-            age_life = ''
-            less_depreciation = ''
-            actual_cash_value = 'DUPLICATE'
-            paid = '$0.00'
-            estimated_remaining = '$0.00'
-
-        formatted_line = "|".join(
-            [
-                item_number,
-                description,
-                qty,
-                estimate_amount,
-                taxes,
-                replacement_total,
-                age_life,
-                less_depreciation,
-                actual_cash_value,
-                paid,
-                estimated_remaining,
-                str(current_page) if current_page is not None else "",
-            ]
-        )
-        processed_lines.append(formatted_line)
-
-        try:
-            item_value = int(item_number)
-        except ValueError:
-            item_value = None
-        else:
-            if item_value < 100000:
-                items_found.append(item_value)
-        if item_value is not None:
-            last_item_number = item_value
-
-    if items_found:
-        items_found.sort()
-        print(f"\n  Items processed: {len(items_found)}")
-        print(f"  First item: {items_found[0]}")
-        print(f"  Last item: {items_found[-1]}")
-
-        item_range = items_found[-1] - items_found[0] + 1
-        if item_range < 50000:
-            missing = [num for num in range(items_found[0], items_found[-1] + 1) if num not in items_found]
-            if missing:
-                print(f"  ⚠ Warning: Missing {len(missing)} items")
-                if len(missing) <= 20:
-                    print(f"  Missing items: {missing}")
-                else:
-                    print(f"  Missing items include: {missing[:10]}... and {len(missing) - 10} more")
-        else:
-            print(f"  ⚠ Item range too large ({item_range:,} items) - skipping gap analysis")
-            print("  Note: Some item numbers may be OCR errors (very large numbers)")
-
-    return '\n'.join(processed_lines)
-
-
-def extract_item_from_buffer(line_buffer):
-    """
-    Extract item number, description, and data from a buffer of lines.
-    The last line should contain the data with "EA" or similar unit.
-    """
-    if not line_buffer:
-        return None
-    
-    # Combine all lines into one text block
-    full_text = ' '.join(line_buffer)
-    
-    # Try to find the item number at the beginning
-    # Look for pattern: number (with possible commas) followed by period
-    # Examples: "1.", "175.", "1,001.", "2,500."
-    number_match = re.search(r'([\d,]+)\s*\.\s*', full_text)
-    
-    if not number_match:
-        return None
-    
-    # Extract and clean the number (remove commas)
-    item_number = number_match.group(1).replace(',', '')
-    
-    # Everything after the number and period
-    rest_of_text = full_text[number_match.end():].strip()
-    
-    # Find where the data starts (look for quantity + unit pattern)
-    data_match = re.search(r'(\d+\.?\d*\s+(?:EA|ea|PC|pc|LB|lb|OZ|oz|PK|pk)\b)', rest_of_text)
-    
-    if data_match:
-        # Split into description and data
-        description = rest_of_text[:data_match.start()].strip()
-        data = rest_of_text[data_match.start():].strip()
-        
-        return {
-            'number': item_number,
-            'text': description,
-            'data': data
-        }
-    
-    return None
-
-
-def parse_data_fields(data_string):
-    """
-    Parse the data string into individual fields with pipe separators.
-    Expected format: Qty | Estimate Amount | Taxes | Replacement Cost Total | Age/Cond./Life | Less Depreciation | Actual Cash Value | Paid | Estimated Remaining
-    """
-    fields = []
-    
-    # Pattern 1: Extract Qty (e.g., "1.00 EA")
-    qty_match = re.search(r'(\d+\.?\d*\s+(?:EA|ea|PC|pc|LB|lb|OZ|oz|PK|pk))', data_string)
-    if qty_match:
-        fields.append(qty_match.group(1).strip())
-        data_string = data_string[qty_match.end():].strip()
-    
-    # Pattern 2: Extract all dollar amounts in order
-    dollar_amounts = re.findall(r'-?\$\d+\.?\d*', data_string)
-    
-    # Pattern 3: Extract Age/Cond./Life pattern (e.g., "2 y/ Avg. /10 y")
-    age_match = re.search(r'(\d+\.?\d*\s*y/\s*\w+\.?\s*/\s*\d+\.?\d*\s*y)', data_string)
-    age_text = age_match.group(1).strip() if age_match else ""
-    
-    # Now we need to figure out which dollar amounts go where
-    # Expected order: Estimate Amount, Taxes, Replacement Cost Total, Less Depreciation, Actual Cash Value, Paid, Estimated Remaining
-    
-    if len(dollar_amounts) >= 3:
-        # First dollar amount: Estimate Amount
-        fields.append(dollar_amounts[0])
-        
-        # Second dollar amount: Taxes
-        fields.append(dollar_amounts[1])
-        
-        # Third dollar amount: Replacement Cost Total
-        fields.append(dollar_amounts[2])
-        
-        # Age/Cond./Life
-        fields.append(age_text)
-        
-        # Remaining dollar amounts
-        if len(dollar_amounts) >= 4:
-            fields.append(dollar_amounts[3])  # Less Depreciation
-        if len(dollar_amounts) >= 5:
-            fields.append(dollar_amounts[4])  # Actual Cash Value
-        if len(dollar_amounts) >= 6:
-            fields.append(dollar_amounts[5])  # Paid
-        if len(dollar_amounts) >= 7:
-            fields.append(dollar_amounts[6])  # Estimated Remaining
-    
-    return fields
-
-
-def format_item_line(item):
-    """
-    Format a numbered item with pipes separating each individual field.
-    Format: Number|Description|Qty|Estimate Amount|Taxes|Replacement Cost Total|Age/Cond./Life|Less Depreciation|Actual Cash Value|Paid|Estimated Remaining
-    """
-    # Start with the item number, then the description
-    result = f"{item['number']}|{item['text'].strip()}"
-    
-    # Add data if available - parse each field intelligently
-    if 'data' in item:
-        fields = parse_data_fields(item['data'])
-        
-        # Add each field with a pipe separator
-        for field in fields:
-            result += '|' + field
-    
-    return result
 
 
 # ============================================================================
@@ -983,48 +839,76 @@ def format_item_line(item):
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("PDF to Excel-Ready Text Converter (Enhanced OCR)")
+    print("PDF to Trade Summary Converter (Enhanced OCR)")
     print("=" * 60)
-    
+
+    # Get project root directory
+    project_root = Path(__file__).resolve().parent.parent
+    pdf_dir = project_root / 'pdf'
+
     # Get input filename from user
     pdf_file = input("\nEnter the PDF filename (e.g., name_of_pdf.pdf): ").strip()
-    
+
     # Remove .pdf extension if user included it, then add it back
     if pdf_file.lower().endswith('.pdf'):
         base_name = pdf_file[:-4]
     else:
         base_name = pdf_file
         pdf_file = pdf_file + '.pdf'
-    
+
+    # Construct full path to PDF in pdf/ directory
+    pdf_path = pdf_dir / pdf_file
+
+    # Check if PDF exists
+    if not pdf_path.exists():
+        print(f"\n✗ Error: Could not find file '{pdf_file}'")
+        print(f"Please place your PDF files in the 'pdf/' directory: {pdf_dir.absolute()}")
+        sys.exit(1)
+
     # Create output filename
     output_file = f"{base_name}_output.txt"
-    
+
+    # Ask for delimiter
+    print("\nColumn Delimiter:")
+    print("  Press Enter for default pipe delimiter: |")
+    print("  Or enter your preferred delimiter (e.g., comma, tab, etc.)")
+
+    delimiter_input = input("\nDelimiter [default: |]: ").strip()
+    delimiter = delimiter_input if delimiter_input else '|'
+
     # Ask for OCR enhancement level
     print("\nOCR Enhancement Levels:")
     print("  'low'    - Basic enhancement, DPI: 200 (fastest)")
     print("  'medium' - Balanced enhancement, DPI: 300 (recommended)")
     print("  'high'   - Aggressive enhancement, DPI: 400 (best quality, slowest)")
-    
+
     enhancement = input("\nSelect enhancement level (low/medium/high) [default: medium]: ").strip().lower()
     if enhancement not in ['low', 'medium', 'high']:
         enhancement = 'medium'
         print(f"Using default: {enhancement}")
-    
-    print(f"\nInput file: {pdf_file}")
-    print(f"Output will be saved as: {base_name}_output.txt")
+
+    print(f"\nInput file: {pdf_path.absolute()}")
+    print(f"Output will be saved to: outputs/{output_file}")
     print(f"Enhancement level: {enhancement}")
+    print(f"Delimiter: '{delimiter}'")
     print()
-    
-    # Run the conversion with batch processing (20 pages at a time)
+
+    # Run the conversion with batch processing
     try:
         total_start = time.time()
-        result = pdf_to_excel_ready_text(pdf_file, output_file, batch_size=20, ocr_enhancement=enhancement)
+        result = pdf_to_trade_summary(
+            str(pdf_path),
+            None,  # Let function determine output path
+            batch_size=20,
+            ocr_enhancement=enhancement,
+            delimiter=delimiter
+        )
         total_time = time.time() - total_start
-        
+
         print(f"\nTotal processing time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
-        
+
     except FileNotFoundError:
         print(f"\n✗ Error: Could not find file '{pdf_file}'")
-        print("Make sure the PDF file exists in the same directory as this script.")
+        print(f"Make sure the PDF file is in the pdf/ directory: {pdf_dir.absolute()}")
     except Exception as e:
         print(f"\n✗ Error: {e}")

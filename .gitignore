@@ -1,9 +1,11 @@
-#Ignore everything
-*
+# Ignore folder contents but keep the folders
+pdf/*
+!pdf/.gitkeep
 
-#EXCEPT these files
-!.gitignore
-!README.md
-!pdftotext_test.py
-!pdftotext.py
-!requirements.txt
+outputs/*
+!outputs/.gitkeep
+
+# Ignore these folders completely
+__pycache__/
+venv/
+.claude/
