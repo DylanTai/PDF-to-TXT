@@ -234,7 +234,9 @@ Processes every page of the selected PDF and outputs formatted text ready for Ex
 - OCR enhancement level (`low`, `medium`, `high`)
 - Column delimiter (default: `|`)
 
-**Output:** `outputs/<pdf_name>_output.txt`
+**Output:**
+- Section format: `outputs/<pdf_name>_all_section.txt`
+- Name format: `outputs/<pdf_name>_all_name.txt` (if selected)
 
 **Features:**
 
@@ -257,7 +259,9 @@ Processes only the first N pages starting from page 1.
 - OCR enhancement level (`low`, `medium`, `high`)
 - Column delimiter (default: `|`)
 
-**Output:** `outputs/<pdf_name>_first_<N>_pages_output.txt`
+**Output:**
+- Section format: `outputs/<pdf_name>_some_<N>_section.txt`
+- Name format: `outputs/<pdf_name>_some_<N>_name.txt` (if selected)
 
 **Features:**
 
@@ -277,7 +281,7 @@ Shows the raw, unformatted Textract OCR output from the first N pages.
 - Number of pages to process
 - OCR enhancement level (`low`, `medium`, `high`)
 
-**Output:** `outputs/raw_textract_output.txt`
+**Output:** `outputs/<pdf_name>_raw_<N>_section.txt`
 
 **Features:**
 
@@ -293,6 +297,16 @@ Choose the appropriate enhancement level based on your PDF quality:
 - **`low`** – 200 DPI, light preprocessing (fastest, good for high-quality PDFs)
 - **`medium`** – 300 DPI, denoising + sharpening (recommended default)
 - **`high`** – 400 DPI, aggressive preprocessing (best for noisy scans, slowest)
+
+### Output Formats
+
+You can choose how to organize the output data:
+
+- **Section format** (`_section.txt`) - Items organized by category sections with section headers (e.g., "AMA --- AUTOMOTIVE & MOTORCYCLE ACC.")
+- **Name format** (`_name.txt`) - Items only, no section headers, all items in one list
+- **Both** - Creates both format files
+
+The section format is useful for reviewing items by category. The name format is useful for importing all items as a flat list without category divisions.
 
 ### Example Session
 
@@ -345,12 +359,12 @@ Delimiter: '|'
 
 ✓✓✓ SUCCESS! ✓✓✓
 
-File saved: outputs/Example_output.txt
+File saved: outputs/Example_all_section.txt
 ```
 
 ## Importing into Excel
 
-1. Open the output file (e.g., `Example_output.txt`).
+1. Open the output file (e.g., `Example_all_section.txt` or `Example_all_name.txt`).
 2. Copy all content and paste into Excel (cell `A1`).
 3. Use **Data → Text to Columns**.
 4. Choose **Delimited**, tick **Other**, and set the delimiter to `|` (or your chosen delimiter).

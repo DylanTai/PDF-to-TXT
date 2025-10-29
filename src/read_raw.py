@@ -116,7 +116,10 @@ def show_raw_textract_output(pdf_path, num_pages=3, ocr_enhancement='medium'):
     project_root = Path(__file__).resolve().parent.parent
     output_dir = project_root / 'outputs'
     output_dir.mkdir(exist_ok=True)
-    output_path = output_dir / 'raw_textract_output.txt'
+
+    # Get PDF filename for output naming
+    pdf_filename = Path(pdf_path).stem
+    output_path = output_dir / f'{pdf_filename}_raw_{num_pages}_section.txt'
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(combined_text)
 

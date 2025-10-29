@@ -491,6 +491,7 @@ def process_trade_summary(text, delimiter='|'):
 
     processed_lines = [header]
     totals = []  # Store totals for final summary
+    seen_sections = set()  # Track sections to avoid duplicates
 
     current_section_code = None
     current_section_name = None
@@ -505,30 +506,7 @@ def process_trade_summary(text, delimiter='|'):
             index += 1
             continue
 
-        # Skip header/footer lines
-        if _is_skip_line(line):
-            index += 1
-            continue
-
-        # Check for section code (3 uppercase letters)
-        section_match = SECTION_CODE_PATTERN.match(line)
-        if section_match:
-            current_section_code = section_match.group(1)
-            index += 1
-
-            # Next line should be the section description
-            if index < total_lines:
-                next_line = lines[index].strip()
-                if next_line and not _is_skip_line(next_line):
-                    current_section_name = next_line
-
-                    # Add section header to output
-                    section_header = f"{current_section_code} --- {current_section_name}"
-                    processed_lines.append(section_header)
-                    index += 1
-            continue
-
-        # Check for total line
+        # Check for total line FIRST (before skip check, since "TOTAL" is in SKIP_LINES)
         total_match = TOTAL_PATTERN.match(line)
         if total_match:
             section_for_total = total_match.group(1)
@@ -551,6 +529,45 @@ def process_trade_summary(text, delimiter='|'):
                     'max_addl': max_addl
                 })
 
+            continue
+
+        # Skip header/footer lines
+        if _is_skip_line(line):
+            index += 1
+            continue
+
+        # Check for section code (3 uppercase letters)
+        section_match = SECTION_CODE_PATTERN.match(line)
+        if section_match:
+            section_code = section_match.group(1)
+
+            # Skip duplicate sections
+            if section_code in seen_sections:
+                index += 1
+                # Skip the description line too
+                if index < total_lines:
+                    index += 1
+                continue
+
+            # Mark this section as seen
+            seen_sections.add(section_code)
+            current_section_code = section_code
+            index += 1
+
+            # Next line should be the section description
+            if index < total_lines:
+                next_line = lines[index].strip()
+                if next_line and not _is_skip_line(next_line):
+                    current_section_name = next_line
+
+                    # Add blank line before section (unless it's the first section)
+                    if len(processed_lines) > 1:  # More than just header
+                        processed_lines.append('')
+
+                    # Add section header to output
+                    section_header = f"{current_section_code} --- {current_section_name}"
+                    processed_lines.append(section_header)
+                    index += 1
             continue
 
         # Check if this might be an item description
@@ -630,8 +647,9 @@ def process_trade_summary(text, delimiter='|'):
         processed_lines.append('TOTALS')
 
         for total in totals:
+            # Remove "TOTAL " prefix from the name - just show the section name and code
             total_line = delimiter.join([
-                f"TOTAL {total['name']} ({total['code']})",
+                f"{total['name']} ({total['code']})",
                 '',  # No quantity for totals
                 total['repl_cost'],
                 total['acv'],
@@ -681,7 +699,7 @@ def pdf_to_trade_summary(
         project_root = Path(__file__).resolve().parent.parent
         output_dir = project_root / 'outputs'
         output_dir.mkdir(exist_ok=True)
-        output_txt_path = output_dir / f"{pdf_file.stem}_output.txt"
+        output_txt_path = output_dir / f"{pdf_file.stem}_all_section.txt"
 
     textract_client = textract_client or get_textract_client()
     client_meta = getattr(textract_client, 'meta', None)

@@ -10,6 +10,7 @@ Provides three options:
 import sys
 from pathlib import Path
 import time
+import re
 
 # Import necessary functions
 try:
@@ -31,6 +32,85 @@ except ImportError as e:
 from pdf2image import convert_from_path, pdfinfo_from_path
 
 
+# Pattern to detect section headers (for name format creation)
+SECTION_HEADER_PATTERN = re.compile(r'^([A-Z]{3})\s+---\s+(.+)$')
+
+
+# ============================================================================
+# FORMATTING HELPER FUNCTIONS
+# ============================================================================
+
+def create_name_format(section_file_path, delimiter='|'):
+    """
+    Create a name-formatted version (items only, no section headers).
+
+    Args:
+        section_file_path: Path to the _section.txt file
+        delimiter: Column delimiter
+
+    Returns:
+        Path: Path to the created _name.txt file
+    """
+    # Determine output path
+    if section_file_path.stem.endswith('_section'):
+        base_name = section_file_path.stem[:-8]  # Remove '_section'
+    else:
+        base_name = section_file_path.stem
+
+    name_path = section_file_path.parent / f"{base_name}_name.txt"
+
+    # Read the section file
+    with open(section_file_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    # Extract items (skip header, section headers, TOTALS section, and blank lines)
+    header = None
+    items = []
+    in_totals = False
+
+    for line in lines:
+        line = line.rstrip('\n')
+
+        # Skip blank lines
+        if not line:
+            continue
+
+        # Capture header
+        if not header and delimiter in line and line.startswith('Description'):
+            header = line
+            continue
+
+        # Check if we're entering TOTALS section
+        if line == 'TOTALS':
+            in_totals = True
+            continue
+
+        # Skip section headers
+        if SECTION_HEADER_PATTERN.match(line):
+            continue
+
+        # Skip lines in TOTALS section
+        if in_totals:
+            continue
+
+        # This is an item line
+        if delimiter in line:
+            items.append(line)
+
+    # Write name format file
+    with open(name_path, 'w', encoding='utf-8') as f:
+        if header:
+            f.write(header + '\n')
+        for item in items:
+            f.write(item + '\n')
+
+    return name_path
+
+
+# ============================================================================
+# PROCESS SOME PAGES FUNCTION
+# ============================================================================
+
 def process_some_pages(pdf_path, num_pages, ocr_enhancement='medium', delimiter='|'):
     """
     Process only the first N pages of a PDF.
@@ -51,7 +131,7 @@ def process_some_pages(pdf_path, num_pages, ocr_enhancement='medium', delimiter=
     project_root = Path(__file__).resolve().parent
     output_dir = project_root / 'outputs'
     output_dir.mkdir(exist_ok=True)
-    output_txt_path = output_dir / f"{pdf_file.stem}_first_{num_pages}_pages_output.txt"
+    output_txt_path = output_dir / f"{pdf_file.stem}_some_{num_pages}_section.txt"
 
     textract_client = get_textract_client()
     client_meta = getattr(textract_client, 'meta', None)
@@ -156,6 +236,10 @@ def process_some_pages(pdf_path, num_pages, ocr_enhancement='medium', delimiter=
     return output_txt_path
 
 
+# ============================================================================
+# MAIN PROGRAM
+# ============================================================================
+
 def main():
     """Main program entry point with user menu."""
     print("\n" + "=" * 60)
@@ -167,12 +251,19 @@ def main():
     print("  3. read_raw    - Show raw Textract output from first N pages")
     print("=" * 60)
 
+    # ========================================
     # Get user choice
+    # ========================================
+
     choice = input("\nEnter your choice (1, 2, or 3): ").strip()
 
     if choice not in ['1', '2', '3']:
         print("\n✗ Error: Invalid choice. Please enter 1, 2, or 3.")
         sys.exit(1)
+
+    # ========================================
+    # Scan for PDF files
+    # ========================================
 
     # Get project root directory
     project_root = Path(__file__).resolve().parent
@@ -195,7 +286,10 @@ def main():
         print(f"Please place your PDF files in: {pdf_dir.absolute()}")
         sys.exit(1)
 
+    # ========================================
     # Display available PDFs
+    # ========================================
+
     print("\n" + "=" * 60)
     print("AVAILABLE PDF FILES:")
     print("=" * 60)
@@ -205,7 +299,10 @@ def main():
         print(f"  {idx}. {pdf_file.name} ({size_mb:.2f} MB)")
     print("=" * 60)
 
-    # Get user choice
+    # ========================================
+    # Get PDF selection from user
+    # ========================================
+
     pdf_choice = input(f"\nSelect a PDF (1-{len(pdf_files)}): ").strip()
 
     try:
@@ -231,7 +328,10 @@ def main():
 
     print(f"\n✓ Selected: {pdf_path.name}")
 
+    # ========================================
     # Get number of pages for read_some and read_raw
+    # ========================================
+
     num_pages = None
     if choice in ['2', '3']:
         num_pages_input = input("\nHow many pages to process? ").strip()
@@ -244,7 +344,10 @@ def main():
             print("\n✗ Error: Please enter a valid number.")
             sys.exit(1)
 
-    # Get OCR enhancement level (not needed for read_raw)
+    # ========================================
+    # Get OCR enhancement level
+    # ========================================
+
     enhancement = 'medium'
     if choice in ['1', '2', '3']:
         print("\nOCR Enhancement Levels:")
@@ -258,7 +361,10 @@ def main():
         else:
             print(f"Using default: {enhancement}")
 
+    # ========================================
     # Get delimiter for read_all and read_some
+    # ========================================
+
     delimiter = '|'
     if choice in ['1', '2']:
         print("\nColumn Delimiter:")
@@ -268,7 +374,25 @@ def main():
         delimiter_input = input("\nDelimiter [default: |]: ").strip()
         delimiter = delimiter_input if delimiter_input else '|'
 
+    # ========================================
+    # Get output format for read_all and read_some
+    # ========================================
+
+    format_type = 'both'
+    if choice in ['1', '2']:
+        print("\nOutput Format:")
+        print("  1. section - Items organized by sections (with section headers)")
+        print("  2. name    - Items only (no section headers)")
+        print("  3. both    - Create both formats")
+
+        format_input = input("\nSelect format (1/2/3) [default: 3]: ").strip()
+        format_map = {'1': 'section', '2': 'name', '3': 'both', '': 'both'}
+        format_type = format_map.get(format_input, 'both')
+
+    # ========================================
     # Execute the chosen option
+    # ========================================
+
     try:
         total_start = time.time()
 
@@ -309,6 +433,21 @@ def main():
                 num_pages=num_pages,
                 ocr_enhancement=enhancement
             )
+
+        # Create additional format if requested (for read_all and read_some)
+        if choice in ['1', '2'] and format_type in ['name', 'both']:
+            print(f"\n{'='*60}")
+            print("Creating additional format(s)...")
+            print(f"{'='*60}")
+
+            result_path = Path(result)
+
+            if format_type == 'name' or format_type == 'both':
+                try:
+                    name_path = create_name_format(result_path, delimiter)
+                    print(f"✓ Created name format: {name_path.name}")
+                except Exception as e:
+                    print(f"✗ Error creating name format: {e}")
 
         total_time = time.time() - total_start
         print(f"\n✓ Total processing time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
